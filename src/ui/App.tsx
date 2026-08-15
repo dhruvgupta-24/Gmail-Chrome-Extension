@@ -256,6 +256,9 @@ export const App: React.FC = () => {
               const emptyBriefing = await sendMessage<BriefingData>({ type: 'EVENTS_GET_BRIEFING' });
               setBriefing(emptyBriefing);
             }}
+            onGetDiagnostics={async () => {
+              return await sendMessage<any>({ type: 'SYSTEM_GET_DIAGNOSTICS' });
+            }}
           />
         </div>
       )}

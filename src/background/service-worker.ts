@@ -9,6 +9,7 @@ import { searchLocalDatabase } from '../storage/local-search';
 import { generateLocalDeterministicResponse } from '../services/ai/local-responder';
 import { analyzeIntent } from '../services/retrieval/intent';
 import { extractEventFromEmail } from '../services/extraction/event-extractor';
+import { getDatabase } from '../storage/database';
 import { saveEvents, getBriefingEvents, getAllEvents, clearAllEvents } from '../storage/events-store';
 import { getSettings, saveSettings } from '../storage/settings-store';
 import { ExtractedEvent } from '../types/events';
@@ -174,6 +175,44 @@ async function handleMessage(req: ExtensionRequest): Promise<any> {
     case 'EVENTS_CLEAR_ALL': {
       await clearAllEvents();
       return { success: true };
+    }
+
+    // --- DIAGNOSTICS & SYSTEM ---
+    case 'SYSTEM_GET_DIAGNOSTICS': {
+      const auth = await OAuthManager.getInstance().getStatus();
+      const settings = await getSettings();
+      const provider = await getAIProvider();
+      const health = await provider.checkHealth();
+      const db = await getDatabase();
+      const eventCount = await db.count('events');
+      const msgCount = await db.count('cached_messages');
+
+      const redirectUri = OAuthManager.getInstance().getRedirectUri();
+      const extensionId = typeof chrome !== 'undefined' && chrome.runtime?.id ? chrome.runtime.id : 'unpacked-local';
+
+      return {
+        gmail: {
+          isAuthenticated: auth.isAuthenticated,
+          userEmail: auth.userEmail,
+          clientId: settings.googleClientId,
+          lastSyncTime: settings.lastSyncTimestamp ? new Date(settings.lastSyncTimestamp).toLocaleString() : 'Never',
+          indexedEventsCount: eventCount,
+          cachedMessagesCount: msgCount
+        },
+        ai: {
+          activeProvider: settings.activeProvider,
+          isAvailable: health.isAvailable,
+          message: health.message,
+          currentModel: settings.activeProvider === 'ollama' ? settings.ollama.model : settings.gemini.model,
+          availableModels: health.availableModels || [],
+          errorDetails: health.errorDetails
+        },
+        extension: {
+          extensionId,
+          redirectUri,
+          isContentScriptLoaded: true
+        }
+      };
     }
 
     // --- SETTINGS ---

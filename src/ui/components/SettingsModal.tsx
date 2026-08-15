@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ExtendedSettings } from '../../storage/settings-store';
-import { OAuthStatus } from '../../types/messages';
+import { OAuthStatus, SystemDiagnostics } from '../../types/messages';
 import { ProviderHealthStatus } from '../../types/ai';
 import { DEFAULT_USER_CONTEXT } from '../../shared/constants';
 import {
@@ -16,7 +16,11 @@ import {
   Check,
   RefreshCw,
   LogOut,
-  LogIn
+  LogIn,
+  Activity,
+  Mail,
+  Server,
+  Layers
 } from 'lucide-react';
 
 interface SettingsModalProps {
@@ -29,6 +33,7 @@ interface SettingsModalProps {
   onLoginOAuth: (clientId?: string) => Promise<void>;
   onLogoutOAuth: () => Promise<void>;
   onClearData: () => Promise<void>;
+  onGetDiagnostics?: () => Promise<SystemDiagnostics>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -40,19 +45,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onTestOllama,
   onLoginOAuth,
   onLogoutOAuth,
-  onClearData
+  onClearData,
+  onGetDiagnostics
 }) => {
-  const [activeTab, setActiveTab] = useState<'ai' | 'oauth' | 'context' | 'data'>('ai');
+  const [activeTab, setActiveTab] = useState<'ai' | 'oauth' | 'context' | 'data' | 'diagnostics'>('ai');
   const [formData, setFormData] = useState<ExtendedSettings>(settings);
   const [healthStatus, setHealthStatus] = useState<ProviderHealthStatus | null>(null);
   const [isTestingOllama, setIsTestingOllama] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [copiedRedirect, setCopiedRedirect] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(null);
+  const [isLoadingDiagnostics, setIsLoadingDiagnostics] = useState(false);
 
   useEffect(() => {
     setFormData(settings);
   }, [settings]);
+
+  const loadDiagnostics = async () => {
+    if (!onGetDiagnostics) return;
+    setIsLoadingDiagnostics(true);
+    try {
+      const diag = await onGetDiagnostics();
+      setDiagnostics(diag);
+    } catch (err) {
+      console.warn('Failed to load diagnostics:', err);
+    } finally {
+      setIsLoadingDiagnostics(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'diagnostics') {
+      loadDiagnostics();
+    }
+  }, [activeTab]);
 
   if (!isOpen) return null;
 
@@ -64,7 +91,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsTestingOllama(true);
     setHealthStatus(null);
     try {
-      // First save current baseUrl & model
       await onSaveSettings({
         ollama: {
           ...formData.ollama,
@@ -127,10 +153,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         {/* Modal Tabs */}
-        <div className="flex border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 px-5 gap-4">
+        <div className="flex border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 px-5 gap-3 overflow-x-auto no-scrollbar">
           <button
             onClick={() => setActiveTab('ai')}
-            className={`flex items-center gap-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors shrink-0 ${
               activeTab === 'ai'
                 ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'
@@ -141,7 +167,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('oauth')}
-            className={`flex items-center gap-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors shrink-0 ${
               activeTab === 'oauth'
                 ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'
@@ -152,7 +178,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('context')}
-            className={`flex items-center gap-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors shrink-0 ${
               activeTab === 'context'
                 ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'
@@ -162,8 +188,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <span>Context</span>
           </button>
           <button
+            onClick={() => setActiveTab('diagnostics')}
+            className={`flex items-center gap-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors shrink-0 ${
+              activeTab === 'diagnostics'
+                ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5" />
+            <span>Diagnostics</span>
+          </button>
+          <button
             onClick={() => setActiveTab('data')}
-            className={`flex items-center gap-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors shrink-0 ${
               activeTab === 'data'
                 ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'
@@ -176,7 +213,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* Modal Content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {/* TAB 1: AI Provider (Ollama) */}
+          {/* TAB 1: AI Provider */}
           {activeTab === 'ai' && (
             <div className="space-y-4">
               <div>
@@ -230,7 +267,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className="w-full px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono"
                     />
                     <p className="text-[11px] text-slate-500 mt-1">
-                      Recommended models: <code className="text-emerald-600 dark:text-emerald-400">llama3.2</code>, <code className="text-emerald-600 dark:text-emerald-400">mistral</code>, or <code className="text-emerald-600 dark:text-emerald-400">qwen2.5</code>.
+                      Recommended: <code className="text-emerald-600 dark:text-emerald-400">llama3.2</code>, <code className="text-emerald-600 dark:text-emerald-400">mistral</code>, or <code className="text-emerald-600 dark:text-emerald-400">qwen2.5</code>.
                     </p>
                   </div>
 
@@ -269,12 +306,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         {healthStatus.errorDetails && (
                           <p className="mt-1 text-[11px] opacity-90">{healthStatus.errorDetails}</p>
                         )}
-                        {healthStatus.availableModels && healthStatus.availableModels.length > 0 && (
-                          <div className="mt-2 text-[11px]">
-                            <span className="font-medium">Installed models: </span>
-                            {healthStatus.availableModels.join(', ')}
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
@@ -298,9 +329,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="AIzaSy..."
                     className="w-full px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono"
                   />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Stored locally in your browser storage.
-                  </p>
                 </div>
               )}
             </div>
@@ -355,10 +383,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               </div>
 
-              {/* Client ID Configuration */}
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Google Cloud OAuth Client ID
+                  Google Cloud OAuth Client ID (Type: Web Application)
                 </label>
                 <input
                   type="text"
@@ -369,7 +396,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 />
               </div>
 
-              {/* Extension Redirect URI */}
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Authorized Redirect URI (for Google Cloud Console)
@@ -389,21 +415,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {copiedRedirect ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </div>
-              </div>
-
-              {/* Quick Setup Guide */}
-              <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 space-y-1.5 text-slate-600 dark:text-slate-400 text-[11px]">
-                <div className="font-semibold text-slate-800 dark:text-slate-200">
-                  How to get your free Google Client ID:
-                </div>
-                <ol className="list-decimal list-inside space-y-1">
-                  <li>Go to Google Cloud Console (console.cloud.google.com).</li>
-                  <li>Enable the <strong>Gmail API</strong>.</li>
-                  <li>In OAuth Consent Screen, set user type to <strong>External</strong> and add yourself as a Test User.</li>
-                  <li>Create Credentials &gt; <strong>OAuth client ID</strong> &gt; Application type: <strong>Web application</strong>.</li>
-                  <li>Add the above Redirect URI to <strong>Authorized redirect URIs</strong>.</li>
-                  <li>Paste the Client ID above and click Sign In!</li>
-                </ol>
               </div>
             </div>
           )}
@@ -429,19 +440,130 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onChange={e => setFormData({ ...formData, userContextPrompt: e.target.value })}
                 className="w-full p-3 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-mono leading-relaxed"
               />
-              <p className="text-[11px] text-slate-500">
-                This context is prepended to the AI system prompt to prioritize your academic deadlines, interviews, and coding tests.
-              </p>
             </div>
           )}
 
-          {/* TAB 4: Data Management */}
+          {/* TAB 4: Real Diagnostic Mode */}
+          {activeTab === 'diagnostics' && (
+            <div className="space-y-3 text-xs">
+              <div className="flex items-center justify-between pb-1">
+                <span className="font-semibold text-slate-700 dark:text-slate-300">
+                  Live System Telemetry
+                </span>
+                <button
+                  onClick={loadDiagnostics}
+                  disabled={isLoadingDiagnostics}
+                  className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isLoadingDiagnostics ? 'animate-spin' : ''}`} />
+                  <span>Refresh Diagnostics</span>
+                </button>
+              </div>
+
+              {isLoadingDiagnostics && !diagnostics ? (
+                <div className="flex justify-center p-6">
+                  <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+                </div>
+              ) : diagnostics ? (
+                <div className="space-y-3 font-mono text-[11px]">
+                  {/* Gmail Status */}
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1.5">
+                    <div className="flex items-center gap-1.5 font-bold font-sans text-xs text-slate-800 dark:text-slate-200">
+                      <Mail className="w-3.5 h-3.5 text-blue-500" />
+                      <span>Gmail Integration</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <div>
+                        <span className="text-slate-400">Authenticated: </span>
+                        <span className={diagnostics.gmail.isAuthenticated ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                          {diagnostics.gmail.isAuthenticated ? 'YES' : 'NO'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400">Account: </span>
+                        <span className="truncate">{diagnostics.gmail.userEmail || 'None'}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400">Indexed Events: </span>
+                        <span className="font-bold text-slate-700 dark:text-slate-300">{diagnostics.gmail.indexedEventsCount}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400">Cached Emails: </span>
+                        <span className="font-bold text-slate-700 dark:text-slate-300">{diagnostics.gmail.cachedMessagesCount}</span>
+                      </div>
+                      <div className="col-span-2">
+                        <span className="text-slate-400">Last Sync: </span>
+                        <span>{diagnostics.gmail.lastSyncTime}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AI Status */}
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1.5">
+                    <div className="flex items-center gap-1.5 font-bold font-sans text-xs text-slate-800 dark:text-slate-200">
+                      <Server className="w-3.5 h-3.5 text-purple-500" />
+                      <span>AI Provider &amp; Model</span>
+                    </div>
+                    <div className="space-y-1 pt-1">
+                      <div>
+                        <span className="text-slate-400">Provider: </span>
+                        <span className="uppercase font-bold text-slate-700 dark:text-slate-300">{diagnostics.ai.activeProvider}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400">Server Reachable: </span>
+                        <span className={diagnostics.ai.isAvailable ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                          {diagnostics.ai.isAvailable ? 'YES (Connected)' : 'NO (Offline/Starting)'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400">Selected Model: </span>
+                        <span className="text-slate-700 dark:text-slate-300">{diagnostics.ai.currentModel}</span>
+                      </div>
+                      {diagnostics.ai.message && (
+                        <div className="text-[10px] text-slate-500 italic">
+                          Status: {diagnostics.ai.message}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Extension Runtime */}
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1.5">
+                    <div className="flex items-center gap-1.5 font-bold font-sans text-xs text-slate-800 dark:text-slate-200">
+                      <Layers className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>Extension Runtime</span>
+                    </div>
+                    <div className="space-y-1 pt-1">
+                      <div>
+                        <span className="text-slate-400">Content Script: </span>
+                        <span className="text-emerald-600 font-bold">LOADED &amp; INJECTED</span>
+                      </div>
+                      <div className="truncate">
+                        <span className="text-slate-400">Extension ID: </span>
+                        <span>{diagnostics.extension.extensionId}</span>
+                      </div>
+                      <div className="truncate">
+                        <span className="text-slate-400">Redirect URI: </span>
+                        <span>{diagnostics.extension.redirectUri}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-4 text-slate-400">
+                  Click Refresh Diagnostics to test live telemetry.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 5: Data Management */}
           {activeTab === 'data' && (
             <div className="space-y-4 text-xs">
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-2">
                 <h3 className="font-semibold text-slate-800 dark:text-slate-200">Local Cache &amp; Storage</h3>
                 <p className="text-slate-500 dark:text-slate-400 text-[11px]">
-                  All extracted events, deadlines, and conversation history are stored entirely on your local machine in IndexedDB. No email content or private data is ever uploaded to any third-party server.
+                  All extracted events, deadlines, and conversation history are stored on your local machine in IndexedDB.
                 </p>
                 <div className="pt-2">
                   <button

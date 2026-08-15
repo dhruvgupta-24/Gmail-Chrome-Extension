@@ -2,13 +2,21 @@ import { createRoot } from 'react-dom/client';
 import { App } from '../ui/App';
 import './styles.css';
 
+console.log('[Gmail AI] Content script loaded');
+
 const HOST_ELEMENT_ID = 'gmail-ai-assistant-host';
 
-function initAssistant() {
+function initAssistant(): boolean {
+  if (!document.body) {
+    return false;
+  }
+
   // Prevent duplicate injection
   if (document.getElementById(HOST_ELEMENT_ID)) {
-    return;
+    return true;
   }
+
+  console.log('[Gmail AI] Injector initialized');
 
   const host = document.createElement('div');
   host.id = HOST_ELEMENT_ID;
@@ -19,6 +27,7 @@ function initAssistant() {
 
   // Attach Shadow Root for complete style isolation
   const shadowRoot = host.attachShadow({ mode: 'open' });
+  console.log('[Gmail AI] Shadow root mounted');
 
   // Inject content.css stylesheet into Shadow Root
   const cssUrl = typeof chrome !== 'undefined' && chrome.runtime?.getURL
@@ -40,12 +49,22 @@ function initAssistant() {
   const root = createRoot(reactContainer);
   root.render(<App />);
 
-  console.log('[Gmail AI Assistant] UI successfully injected into Gmail Shadow DOM.');
+  return true;
 }
 
 // Observe and inject when DOM is ready
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initAssistant);
+  document.addEventListener('DOMContentLoaded', () => {
+    if (!initAssistant()) {
+      const interval = setInterval(() => {
+        if (initAssistant()) clearInterval(interval);
+      }, 250);
+    }
+  });
 } else {
-  initAssistant();
+  if (!initAssistant()) {
+    const interval = setInterval(() => {
+      if (initAssistant()) clearInterval(interval);
+    }, 250);
+  }
 }

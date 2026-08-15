@@ -59,6 +59,9 @@ const OptionsApp: React.FC = () => {
         onClearData={async () => {
           await sendMessage({ type: 'EVENTS_CLEAR_ALL' });
         }}
+        onGetDiagnostics={async () => {
+          return await sendMessage<any>({ type: 'SYSTEM_GET_DIAGNOSTICS' });
+        }}
       />
     </div>
   );

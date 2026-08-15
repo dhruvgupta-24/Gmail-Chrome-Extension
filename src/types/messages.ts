@@ -7,6 +7,30 @@ export interface OAuthStatus {
   errorMessage?: string;
 }
 
+export interface SystemDiagnostics {
+  gmail: {
+    isAuthenticated: boolean;
+    userEmail?: string;
+    clientId?: string;
+    lastSyncTime?: string;
+    indexedEventsCount: number;
+    cachedMessagesCount: number;
+  };
+  ai: {
+    activeProvider: string;
+    isAvailable: boolean;
+    message: string;
+    currentModel: string;
+    availableModels: string[];
+    errorDetails?: string;
+  };
+  extension: {
+    extensionId: string;
+    redirectUri: string;
+    isContentScriptLoaded: boolean;
+  };
+}
+
 export type ExtensionRequest =
   // Auth
   | { type: 'AUTH_GET_STATUS' }
@@ -28,6 +52,9 @@ export type ExtensionRequest =
   | { type: 'EVENTS_GET_ALL' }
   | { type: 'EVENTS_GET_BRIEFING' }
   | { type: 'EVENTS_CLEAR_ALL' }
+
+  // Diagnostics & System
+  | { type: 'SYSTEM_GET_DIAGNOSTICS' }
 
   // Settings
   | { type: 'SETTINGS_GET' }
