@@ -9,12 +9,17 @@
   color: #1e293b;
   font-size: 14px;
   line-height: 1.5;
+  box-sizing: border-box;
 }
 
-/* Custom smooth scrollbars */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* Custom modern thin scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -22,12 +27,21 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.4);
+  background: rgba(148, 163, 184, 0.35);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.7);
+  background: rgba(148, 163, 184, 0.65);
+}
+
+/* Hide scrollbar for Chrome, Safari and Opera on chips */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 /* Animation keyframes */

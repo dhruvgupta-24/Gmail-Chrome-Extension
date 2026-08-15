@@ -35,30 +35,30 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   };
 
   return (
-    <div className="flex flex-col border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm select-none rounded-t-2xl">
+    <div className="flex flex-col shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm select-none rounded-t-2xl z-10">
       {/* Top bar */}
       <div className="flex items-center justify-between px-3.5 py-2.5">
-        <div className="flex items-center space-x-2">
-          <div className="flex items-center justify-center w-6 h-6 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+        <div className="flex items-center space-x-2 min-w-0">
+          <div className="flex items-center justify-center w-6 h-6 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
             <Sparkles className="w-3.5 h-3.5" />
           </div>
-          <div>
-            <h2 className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
-              Gmail AI Assistant
+          <div className="min-w-0">
+            <h2 className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5 truncate">
+              <span className="truncate">Gmail AI Assistant</span>
               {dueTodayCount > 0 && (
-                <span className="px-1.5 py-0.5 text-[9px] font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-full">
-                  {dueTodayCount} due today
+                <span className="px-1.5 py-0.5 text-[9px] font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-full shrink-0">
+                  {dueTodayCount} due
                 </span>
               )}
             </h2>
             <p className="text-[10px] text-slate-400 dark:text-slate-500 flex items-center gap-1">
-              <Check className="w-2.5 h-2.5 text-emerald-500" />
-              <span>{formatSyncTime(lastSyncTimestamp)}</span>
+              <Check className="w-2.5 h-2.5 text-emerald-500 shrink-0" />
+              <span className="truncate">{formatSyncTime(lastSyncTimestamp)}</span>
             </p>
           </div>
         </div>
 
-        <div className="flex items-center space-x-1">
+        <div className="flex items-center space-x-1 shrink-0">
           <button
             onClick={onRefresh}
             disabled={isRefreshing}

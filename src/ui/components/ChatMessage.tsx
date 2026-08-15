@@ -11,18 +11,18 @@ interface ChatMessageProps {
 export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollowUp }) => {
   const isUser = message.role === 'user';
 
-  // Formatted markdown renderer for bullet points, bold text, links, headings
+  // Formatted markdown renderer with full text wrapping and safety
   const renderFormattedContent = (content: string) => {
     const lines = content.split('\n');
     return (
-      <div className="space-y-1.5 text-xs sm:text-sm leading-relaxed text-slate-800 dark:text-slate-200">
+      <div className="space-y-1.5 text-xs leading-relaxed text-slate-800 dark:text-slate-200 break-words [overflow-wrap:anywhere]">
         {lines.map((line, idx) => {
-          if (!line.trim()) return <div key={idx} className="h-1" />;
+          if (!line.trim()) return <div key={idx} className="h-0.5" />;
 
           // Heading 4
           if (line.startsWith('#### ')) {
             return (
-              <h5 key={idx} className="font-semibold text-xs text-slate-800 dark:text-slate-200 mt-2">
+              <h5 key={idx} className="font-semibold text-xs text-slate-800 dark:text-slate-200 mt-1.5 break-words">
                 {line.substring(5)}
               </h5>
             );
@@ -31,7 +31,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
           // Heading 3
           if (line.startsWith('### ')) {
             return (
-              <h4 key={idx} className="font-bold text-xs uppercase tracking-wider text-emerald-700 dark:text-emerald-400 mt-3 pt-1 border-t border-slate-100 dark:border-slate-800/60">
+              <h4 key={idx} className="font-bold text-xs uppercase tracking-wider text-emerald-700 dark:text-emerald-400 mt-2.5 pt-1 border-t border-slate-100 dark:border-slate-800/60 break-words">
                 {line.substring(4)}
               </h4>
             );
@@ -40,7 +40,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
           // Heading 2 / 1
           if (line.startsWith('## ') || line.startsWith('# ')) {
             return (
-              <h3 key={idx} className="font-semibold text-sm text-slate-900 dark:text-slate-100 mt-2.5">
+              <h3 key={idx} className="font-semibold text-xs text-slate-900 dark:text-slate-100 mt-2 break-words">
                 {line.replace(/^#+\s*/, '')}
               </h3>
             );
@@ -50,14 +50,14 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
           if (line.trim().startsWith('•') || line.trim().startsWith('-') || line.trim().startsWith('*')) {
             const clean = line.trim().replace(/^[\•\-\*]\s*/, '');
             return (
-              <div key={idx} className="flex items-start gap-2 pl-1 my-0.5">
-                <span className="text-emerald-500 font-bold leading-none mt-1">•</span>
-                <span className="flex-1">{renderInlineMarkdown(clean)}</span>
+              <div key={idx} className="flex items-start gap-1.5 pl-0.5 my-0.5 min-w-0">
+                <span className="text-emerald-500 font-bold leading-none mt-1 shrink-0">•</span>
+                <span className="flex-1 min-w-0 break-words [overflow-wrap:anywhere]">{renderInlineMarkdown(clean)}</span>
               </div>
             );
           }
 
-          return <p key={idx}>{renderInlineMarkdown(line)}</p>;
+          return <p key={idx} className="break-words [overflow-wrap:anywhere]">{renderInlineMarkdown(line)}</p>;
         })}
       </div>
     );
@@ -82,10 +82,10 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-emerald-600 dark:text-emerald-400 hover:underline font-medium inline-flex items-center gap-0.5"
+          className="text-emerald-600 dark:text-emerald-400 hover:underline font-medium inline-flex items-center gap-0.5 break-all"
         >
           <span>{label}</span>
-          <ExternalLink className="w-2.5 h-2.5 inline opacity-70" />
+          <ExternalLink className="w-2.5 h-2.5 inline opacity-70 shrink-0" />
         </a>
       );
       lastIdx = linkRegex.lastIndex;
@@ -110,22 +110,22 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
   };
 
   return (
-    <div className={`flex gap-2.5 ${isUser ? 'flex-row-reverse' : 'flex-row'} items-start`}>
+    <div className={`flex gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'} items-start min-w-0 max-w-full`}>
       {/* Avatar */}
       <div
-        className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-xs font-semibold ${
+        className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 text-xs font-semibold ${
           isUser
             ? 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900'
             : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
         }`}
       >
-        {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+        {isUser ? <User className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5" />}
       </div>
 
       {/* Message Body */}
-      <div className={`max-w-[88%] space-y-2 ${isUser ? 'items-end' : 'items-start'}`}>
+      <div className={`min-w-0 max-w-[88%] space-y-1.5 ${isUser ? 'items-end' : 'items-start'}`}>
         <div
-          className={`px-3.5 py-2.5 rounded-2xl ${
+          className={`px-3 py-2 rounded-2xl break-words [overflow-wrap:anywhere] overflow-hidden ${
             isUser
               ? 'bg-emerald-600 text-white rounded-tr-sm'
               : message.isError
@@ -134,31 +134,31 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
           }`}
         >
           {message.isError && (
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-600 dark:text-rose-400 mb-1">
-              <AlertCircle className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400 mb-1">
+              <AlertCircle className="w-3 h-3 shrink-0" />
               <span>Notice</span>
             </div>
           )}
 
           {isUser ? (
-            <p className="text-xs sm:text-sm leading-relaxed">{message.content}</p>
+            <p className="text-xs leading-relaxed break-words [overflow-wrap:anywhere]">{message.content}</p>
           ) : (
             renderFormattedContent(message.content)
           )}
         </div>
 
-        {/* Source Emails Attribution with same-tab navigation */}
+        {/* Source Emails Attribution */}
         {message.sourceMessages && message.sourceMessages.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-            <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Sources:</span>
+          <div className="flex flex-wrap items-center gap-1 pt-0.5 max-w-full overflow-hidden">
+            <span className="text-[9px] font-medium text-slate-400 uppercase tracking-wider shrink-0">Sources:</span>
             {message.sourceMessages.map((src, idx) => (
               <button
                 key={idx}
                 onClick={() => openGmailMessageInCurrentTab(src.messageId, src.threadId)}
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-700 transition-colors truncate max-w-[220px] text-left cursor-pointer"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-700 transition-colors truncate max-w-[190px] text-left cursor-pointer"
                 title={`Subject: ${src.subject}\nFrom: ${src.sender || 'Unknown'}`}
               >
-                <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                <Mail className="w-2.5 h-2.5 text-slate-400 shrink-0" />
                 <span className="truncate">{src.subject || 'Email'}</span>
               </button>
             ))}
@@ -167,12 +167,12 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
 
         {/* Suggested Follow-up chips */}
         {message.suggestedFollowUps && message.suggestedFollowUps.length > 0 && onSelectFollowUp && (
-          <div className="flex flex-wrap gap-1.5 pt-1">
+          <div className="flex flex-wrap gap-1 pt-0.5 max-w-full">
             {message.suggestedFollowUps.map((prompt, idx) => (
               <button
                 key={idx}
                 onClick={() => onSelectFollowUp(prompt)}
-                className="text-[11px] font-medium px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/80 rounded-full hover:bg-emerald-100 transition-colors"
+                className="text-[10px] font-medium px-2 py-0.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/80 rounded-full hover:bg-emerald-100 transition-colors cursor-pointer truncate max-w-[200px]"
               >
                 {prompt}
               </button>

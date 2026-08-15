@@ -185,7 +185,7 @@ export const App: React.FC = () => {
 
       {/* Floating Assistant Card / Popup */}
       {isOpen && (
-        <div className="fixed bottom-6 right-6 z-[999999] w-[calc(100vw-32px)] sm:w-[410px] h-[min(620px,calc(100vh-48px))] bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xl shadow-slate-900/25 dark:shadow-black/70 flex flex-col overflow-hidden animate-popup-in select-text">
+        <div className="fixed bottom-6 right-6 z-[999999] w-[410px] max-w-[calc(100vw-32px)] h-[620px] max-h-[calc(100vh-48px)] bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xl shadow-slate-900/25 dark:shadow-black/70 flex flex-col overflow-hidden animate-popup-in select-text">
           <AssistantHeader
             activeTab={activeTab}
             onTabChange={setActiveTab}
@@ -198,7 +198,7 @@ export const App: React.FC = () => {
             lastSyncTimestamp={settings.lastSyncTimestamp}
           />
 
-          <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/30 dark:bg-slate-950/20">
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-slate-50/30 dark:bg-slate-950/20">
             {activeTab === 'briefing' ? (
               <BriefingView
                 briefing={briefing}

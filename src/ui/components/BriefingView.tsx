@@ -31,10 +31,10 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
 
   if (isLoading && !briefing) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 p-6 text-center">
-        <RefreshCw className="w-8 h-8 text-emerald-600 dark:text-emerald-400 animate-spin mb-3" />
-        <h3 className="text-sm font-medium text-slate-800 dark:text-slate-200">Scanning recent emails...</h3>
-        <p className="text-xs text-slate-500 mt-1 max-w-xs">
+      <div className="flex-1 min-h-0 flex flex-col items-center justify-center p-6 text-center">
+        <RefreshCw className="w-7 h-7 text-emerald-600 dark:text-emerald-400 animate-spin mb-3" />
+        <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200">Scanning recent emails...</h3>
+        <p className="text-[11px] text-slate-500 mt-1 max-w-xs leading-relaxed">
           Retrieving academic deadlines, tests, and priority actions.
         </p>
       </div>
@@ -44,116 +44,105 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
   const hasEvents = briefing && briefing.totalCount > 0;
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-5">
+    <div className="flex-1 min-h-0 overflow-y-auto px-3.5 py-3 space-y-4 overscroll-contain">
       {/* Header Card */}
-      <div className="rounded-xl bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-transparent p-4 border border-emerald-500/20">
+      <div className="rounded-xl bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-transparent p-3.5 border border-emerald-500/20 shrink-0">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+            <h1 className="text-sm font-bold text-slate-900 dark:text-slate-100">
               {getGreeting()}
             </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{todayStr}</p>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{todayStr}</p>
           </div>
           <button
             onClick={onRefresh}
             disabled={isLoading}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-750 text-xs font-medium text-slate-700 dark:text-slate-200 rounded-lg shadow-sm transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-750 text-[11px] font-medium text-slate-700 dark:text-slate-200 rounded-lg shadow-sm transition-colors cursor-pointer"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-emerald-600' : ''}`} />
-            <span>Sync</span>
+            <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin text-emerald-600' : ''}`} />
+            <span>{isLoading ? 'Syncing...' : 'Sync'}</span>
           </button>
         </div>
 
-        {briefing && briefing.today.length > 0 && (
-          <div className="mt-3 flex items-center gap-2 text-xs font-medium text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/50 p-2.5 rounded-lg border border-rose-200 dark:border-rose-800/80">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>You have {briefing.today.length} item{briefing.today.length > 1 ? 's' : ''} requiring attention today!</span>
-          </div>
-        )}
+        {/* Quick summary status */}
+        <div className="mt-2.5 pt-2 border-t border-emerald-500/10 flex items-center justify-between text-xs">
+          <span className="text-slate-600 dark:text-slate-400 font-medium">
+            {briefing?.today.length
+              ? `You have ${briefing.today.length} item${briefing.today.length > 1 ? 's' : ''} requiring attention today!`
+              : 'You have no urgent deadlines due today.'}
+          </span>
+        </div>
       </div>
 
       {!hasEvents ? (
-        <div className="text-center py-10 px-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
-          <CheckCircle2 className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-2.5" />
-          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">No urgent obligations found</h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xs mx-auto">
-            Your mailbox appears clear of immediate deadlines or tests for the selected window.
-          </p>
-          <div className="mt-4 flex flex-wrap justify-center gap-2">
-            <button
-              onClick={onRefresh}
-              className="px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors"
-            >
-              Sync Mailbox Now
-            </button>
-            <button
-              onClick={() => onSelectAction('Find all upcoming tests and assessments')}
-              className="px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
-            >
-              Search Tests
-            </button>
+        <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
+          <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 mb-2">
+            <CheckCircle2 className="w-5 h-5 text-emerald-500" />
           </div>
+          <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+            Inbox is organized
+          </h3>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 max-w-xs leading-relaxed">
+            No pending tests, assessments, or placement deadlines detected in your synced emails.
+          </p>
+          <button
+            onClick={() => onSelectAction('Find all upcoming tests and assessments')}
+            className="mt-3 text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400"
+          >
+            Search all mailbox events &rarr;
+          </button>
         </div>
       ) : (
         <>
-          {/* TODAY SECTION */}
+          {/* Today's Priority Section */}
           {briefing.today.length > 0 && (
-            <section className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xs font-bold tracking-wider text-rose-600 dark:text-rose-400 uppercase flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-                  Today
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 px-0.5">
+                <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                <h2 className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                  Today's Priorities ({briefing.today.length})
                 </h2>
-                <span className="text-[11px] font-medium text-slate-400">
-                  {briefing.today.length} item{briefing.today.length > 1 ? 's' : ''}
-                </span>
               </div>
-              <div className="space-y-2.5">
+              <div className="space-y-2">
                 {briefing.today.map(event => (
                   <EventCard key={event.id} event={event} />
                 ))}
               </div>
-            </section>
+            </div>
           )}
 
-          {/* TOMORROW SECTION */}
+          {/* Tomorrow's Section */}
           {briefing.tomorrow.length > 0 && (
-            <section className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xs font-bold tracking-wider text-amber-600 dark:text-amber-400 uppercase flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                  Tomorrow
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 px-0.5">
+                <Calendar className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <h2 className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                  Tomorrow ({briefing.tomorrow.length})
                 </h2>
-                <span className="text-[11px] font-medium text-slate-400">
-                  {briefing.tomorrow.length} item{briefing.tomorrow.length > 1 ? 's' : ''}
-                </span>
               </div>
-              <div className="space-y-2.5">
+              <div className="space-y-2">
                 {briefing.tomorrow.map(event => (
                   <EventCard key={event.id} event={event} />
                 ))}
               </div>
-            </section>
+            </div>
           )}
 
-          {/* UPCOMING SECTION */}
+          {/* Upcoming Section */}
           {briefing.upcoming.length > 0 && (
-            <section className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xs font-bold tracking-wider text-slate-600 dark:text-slate-400 uppercase flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5" />
-                  Upcoming
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 px-0.5">
+                <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <h2 className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                  Upcoming ({briefing.upcoming.length})
                 </h2>
-                <span className="text-[11px] font-medium text-slate-400">
-                  {briefing.upcoming.length} item{briefing.upcoming.length > 1 ? 's' : ''}
-                </span>
               </div>
-              <div className="space-y-2.5">
+              <div className="space-y-2">
                 {briefing.upcoming.map(event => (
                   <EventCard key={event.id} event={event} />
                 ))}
               </div>
-            </section>
+            </div>
           )}
         </>
       )}
