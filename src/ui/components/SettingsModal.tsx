@@ -263,11 +263,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           ollama: { ...formData.ollama, model: e.target.value }
                         })
                       }
-                      placeholder="llama3.2"
+                      placeholder="qwen3:8b"
                       className="w-full px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono"
                     />
                     <p className="text-[11px] text-slate-500 mt-1">
-                      Recommended: <code className="text-emerald-600 dark:text-emerald-400">llama3.2</code>, <code className="text-emerald-600 dark:text-emerald-400">mistral</code>, or <code className="text-emerald-600 dark:text-emerald-400">qwen2.5</code>.
+                      Recommended: <code className="text-emerald-600 dark:text-emerald-400">qwen3:8b</code>, <code className="text-emerald-600 dark:text-emerald-400">llama3.2</code>, or <code className="text-emerald-600 dark:text-emerald-400">mistral</code>.
                     </p>
                   </div>
 

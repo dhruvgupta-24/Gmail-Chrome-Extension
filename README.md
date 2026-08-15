@@ -128,13 +128,13 @@ Because this is a personal extension running locally, you connect it to your own
    ```bash
    ollama serve
    ```
-2. Pull your preferred model (e.g. `llama3.2` or `mistral`):
+2. Pull your preferred model (e.g. `qwen3:8b`, `llama3.2`, or `mistral`):
    ```bash
-   ollama pull llama3.2
+   ollama pull qwen3:8b
    ```
 3. In the extension **Settings** > **AI Provider**:
    - Set Ollama Base URL: `http://localhost:11434`
-   - Set Model: `llama3.2`
+   - Set Model: `qwen3:8b`
    - Click **Test Ollama Connection** (shows green checkmark when connected).
 
 ---

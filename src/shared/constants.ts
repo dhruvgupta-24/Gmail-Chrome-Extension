@@ -36,7 +36,7 @@ export const DEFAULT_SETTINGS: AIProviderSettings = {
   activeProvider: 'ollama',
   ollama: {
     baseUrl: 'http://localhost:11434',
-    model: 'llama3.2',
+    model: 'qwen3:8b',
     temperature: 0.1,
     keepAlive: '5m'
   },

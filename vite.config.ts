@@ -40,25 +40,16 @@ export default defineConfig({
     rollupOptions: {
       input: {
         background: resolve(__dirname, 'src/background/service-worker.ts'),
-        content: resolve(__dirname, 'src/content/gmail-injector.tsx'),
         options: resolve(__dirname, 'options.html'),
         popup: resolve(__dirname, 'popup.html'),
       },
       output: {
         entryFileNames: (chunkInfo) => {
           if (chunkInfo.name === 'background') return 'background.js';
-          if (chunkInfo.name === 'content') return 'content.js';
           return 'assets/[name]-[hash].js';
         },
         chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: (assetInfo) => {
-          if (assetInfo.name?.endsWith('.css')) {
-            if (assetInfo.name.includes('content') || assetInfo.name.includes('injector') || assetInfo.name.includes('styles')) {
-              return 'content.css';
-            }
-          }
-          return 'assets/[name]-[hash].[ext]';
-        }
+        assetFileNames: 'assets/[name]-[hash].[ext]'
       }
     }
   }

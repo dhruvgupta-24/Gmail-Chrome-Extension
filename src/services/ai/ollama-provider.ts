@@ -12,7 +12,7 @@ export class OllamaProvider implements AIProvider {
   constructor(config: OllamaConfig) {
     this.config = {
       baseUrl: config.baseUrl || 'http://localhost:11434',
-      model: config.model || 'llama3.2',
+      model: config.model || 'qwen3:8b',
       temperature: config.temperature ?? 0.1,
       keepAlive: config.keepAlive || '5m'
     };
