@@ -32,22 +32,24 @@ export interface SourceMessageRef {
   threadId?: string;
   subject: string;
   sender?: string;
-  receivedAt: string; // ISO date string or formatted date
+  receivedAt: string; // ISO date string or formatted date (METADATA ONLY)
   snippet?: string;
 }
 
 export interface ExtractedEvent {
-  id: string; // Typically "thread-<threadId>" or "event-<messageId>"
+  id: string; // "event-<normalizedKey>" or "thread-<threadId>"
   threadId?: string;
   title: string; // Clean title without "Re:", "Fwd:", etc.
   company?: string; // Company / Organization / Institution
   type: EventType;
-  startDate?: string; // YYYY-MM-DD
-  endDate?: string; // YYYY-MM-DD for multi-day window
-  date?: string; // YYYY-MM-DD (primary/start date for backward compatibility)
+  startDate?: string; // YYYY-MM-DD (Explicit event start date)
+  endDate?: string; // YYYY-MM-DD (Explicit event end date if continuous window)
+  date?: string; // YYYY-MM-DD (Primary event date or deadline date)
   time?: string; // e.g. "11:59 PM", "10:00 AM"
-  deadline?: string; // Normalized string description e.g. "2026-08-16 at 11:59 PM"
-  allDates?: string[]; // All specific event dates extracted from the text
+  deadline?: string; // Point-in-time deadline e.g. "2026-08-20" or "2026-08-20 at 11:59 PM"
+  isDeadline?: boolean; // True if this event is primarily a single deadline
+  isContinuousRange?: boolean; // True ONLY if the text explicitly states a continuous active window
+  allDates?: string[]; // Discrete individual dates mentioned for the event (e.g. ["2026-08-12", "2026-08-24", "2026-08-25"])
   organization?: string;
   actionRequired: boolean;
   actionDescription?: string;
@@ -55,6 +57,7 @@ export interface ExtractedEvent {
   sourceMessages: SourceMessageRef[];
   confidence?: number;
   status: EventStatus;
+  schemaVersion?: number;
   createdAt: string; // ISO timestamp
   updatedAt: string; // ISO timestamp
 }
@@ -63,8 +66,9 @@ export interface DateRangeQuery {
   isDateQuery: boolean;
   startDate?: string; // YYYY-MM-DD
   endDate?: string; // YYYY-MM-DD
-  label?: string; // e.g. "Aug 15–20, 2026"
+  label?: string; // e.g. "Aug 15–16, 2026"
   isSingleDay?: boolean;
+  isTodayAndTomorrow?: boolean;
 }
 
 export interface EventFilter {

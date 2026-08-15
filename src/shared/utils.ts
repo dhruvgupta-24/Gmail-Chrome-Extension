@@ -18,27 +18,46 @@ export function getTodayDateString(date: Date = new Date()): string {
 
 /**
  * Formats an ISO date string or Date object into human-readable date.
- * e.g., "Aug 15, 2026" or "Today, 11:59 PM"
+ * e.g., "Aug 15, 2026" or "Today, 11:59 PM" or "Aug 15–19, 2026"
  */
-export function formatHumanDate(dateStr?: string, timeStr?: string): string {
+export function formatHumanDate(
+  dateStr?: string,
+  timeStr?: string,
+  endDateStr?: string,
+  isContinuousRange?: boolean
+): string {
   if (!dateStr) return timeStr ? `At ${timeStr}` : 'Date not specified';
-  
+
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
   try {
     const [year, month, day] = dateStr.split('-').map(Number);
     if (!year || !month || !day) return dateStr;
-    
+
+    const formattedStartDate = `${monthNames[month - 1]} ${day}`;
+
+    // If explicit continuous range (e.g. Aug 15–19, 2026)
+    if (isContinuousRange && endDateStr && endDateStr !== dateStr) {
+      const [eYear, eMonth, eDay] = endDateStr.split('-').map(Number);
+      if (eYear && eMonth && eDay) {
+        if (month === eMonth) {
+          return `${monthNames[month - 1]} ${day}–${eDay}, ${year}${timeStr ? ` at ${timeStr}` : ''}`;
+        }
+        return `${formattedStartDate} – ${monthNames[eMonth - 1]} ${eDay}, ${eYear}${timeStr ? ` at ${timeStr}` : ''}`;
+      }
+    }
+
     const targetDate = new Date(year, month - 1, day);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const targetMidnight = new Date(targetDate);
     targetMidnight.setHours(0, 0, 0, 0);
-    
+
     const diffDays = Math.round((targetMidnight.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    
-    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const formattedDate = `${monthNames[month - 1]} ${day}, ${year}`;
-    
+
+    const formattedFullDate = `${monthNames[month - 1]} ${day}, ${year}`;
+
     let relativeLabel = '';
     if (diffDays === 0) relativeLabel = 'Today';
     else if (diffDays === 1) relativeLabel = 'Tomorrow';
@@ -49,10 +68,10 @@ export function formatHumanDate(dateStr?: string, timeStr?: string): string {
     }
 
     if (relativeLabel) {
-      return timeStr ? `${relativeLabel} (${formattedDate}) at ${timeStr}` : `${relativeLabel} (${formattedDate})`;
+      return timeStr ? `${relativeLabel} (${formattedFullDate}) at ${timeStr}` : `${relativeLabel} (${formattedFullDate})`;
     }
-    
-    return timeStr ? `${formattedDate} at ${timeStr}` : formattedDate;
+
+    return timeStr ? `${formattedFullDate} at ${timeStr}` : formattedFullDate;
   } catch {
     return dateStr;
   }

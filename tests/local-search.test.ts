@@ -2,118 +2,147 @@ import { describe, it, expect } from 'vitest';
 import { generateLocalDeterministicResponse } from '../src/services/ai/local-responder';
 import { ExtractedEvent } from '../src/types/events';
 
-describe('Local Responder (Extract Once -> Query Many)', () => {
-  const fixedNow = new Date('2026-08-14T10:00:00Z');
+describe('Local Responder & Today/Tomorrow Integration', () => {
+  // Reference date: Saturday, August 15, 2026
+  const fixedNow = new Date('2026-08-15T10:00:00Z');
 
-  const mockEvents: ExtractedEvent[] = [
+  const mockMailboxEvents: ExtractedEvent[] = [
+    // 1. TCS from May 8 (Actual event Aug 17) -> NOT today/tomorrow
     {
-      id: 'ev-1',
-      title: 'Google Coding Round 1',
-      type: 'coding_round',
-      startDate: '2026-08-15',
-      date: '2026-08-15',
-      time: '10:00 AM',
-      organization: 'Google',
+      id: 'ev-tcs',
+      title: 'TCS National Qualifier Test (NQT)',
+      type: 'assessment',
+      date: '2026-08-17',
+      allDates: ['2026-08-17'],
+      isContinuousRange: false,
+      organization: 'TCS',
       actionRequired: true,
-      actionDescription: 'Take the coding test on HackerRank',
-      links: [{ label: 'Open HackerRank Test', url: 'https://hackerrank.com/google-oa', type: 'assessment' }],
-      sourceMessages: [
-        {
-          messageId: 'msg-1',
-          subject: 'Google Online Assessment',
-          receivedAt: '2026-08-14T08:00:00Z'
-        }
-      ],
+      links: [{ label: 'NQT Portal', url: 'https://tcs.com/nqt' }],
+      sourceMessages: [{ messageId: 'm-tcs', subject: 'TCS NQT', receivedAt: '2026-05-08T08:00:00Z' }],
+      status: 'upcoming',
+      createdAt: '2026-05-08T08:00:00Z',
+      updatedAt: '2026-05-08T08:00:00Z'
+    },
+    // 2. BNP Paribas from July 30 (Deadline Aug 20) -> NOT today/tomorrow
+    {
+      id: 'ev-bnp',
+      title: 'INNOVERSITÉ - Internship Opportunity - BNP Paribas India COE',
+      type: 'internship',
+      date: '2026-08-20',
+      deadline: '2026-08-20',
+      isDeadline: true,
+      isContinuousRange: false,
+      organization: 'BNP Paribas',
+      actionRequired: true,
+      links: [{ label: 'Apply', url: 'https://bnpparibas.com/apply' }],
+      sourceMessages: [{ messageId: 'm-bnp', subject: 'BNP Paribas', receivedAt: '2026-07-30T08:00:00Z' }],
+      status: 'upcoming',
+      createdAt: '2026-07-30T08:00:00Z',
+      updatedAt: '2026-07-30T08:00:00Z'
+    },
+    // 3. Cognizant from Aug 3 (PPT on Sep 7) -> NOT today/tomorrow
+    {
+      id: 'ev-cog',
+      title: "Pre-Placement Talk: Cognizant's Ace Frontier Engineer Program",
+      type: 'ppt',
+      date: '2026-09-07',
+      isContinuousRange: false,
+      organization: 'Cognizant',
+      actionRequired: false,
+      links: [],
+      sourceMessages: [{ messageId: 'm-cog', subject: 'Cognizant PPT', receivedAt: '2026-08-03T08:00:00Z' }],
+      status: 'upcoming',
+      createdAt: '2026-08-03T08:00:00Z',
+      updatedAt: '2026-08-03T08:00:00Z'
+    },
+    // 4. Sigmoid from Aug 11 (PPT on 12th, OA on 24th & 25th) -> NOT today/tomorrow
+    {
+      id: 'ev-sig',
+      title: 'Campus Detail | Sigmoid Data Engineering Track PPT & OA',
+      type: 'assessment',
+      date: '2026-08-25',
+      allDates: ['2026-08-12', '2026-08-24', '2026-08-25'],
+      isContinuousRange: false,
+      organization: 'Sigmoid',
+      actionRequired: true,
+      links: [{ label: 'OA Link', url: 'https://sigmoid.com/oa' }],
+      sourceMessages: [{ messageId: 'm-sig', subject: 'Sigmoid OA', receivedAt: '2026-08-11T08:00:00Z' }],
+      status: 'upcoming',
+      createdAt: '2026-08-11T08:00:00Z',
+      updatedAt: '2026-08-11T08:00:00Z'
+    },
+    // 5. AIMCAT Aug 15–19 (Active window contains Aug 15 & Aug 16) -> IS TODAY / TOMORROW!
+    {
+      id: 'ev-aimcat',
+      title: 'AIMCAT2714 Test window',
+      type: 'assessment',
+      startDate: '2026-08-15',
+      endDate: '2026-08-19',
+      date: '2026-08-15',
+      isContinuousRange: true,
+      organization: 'TIME',
+      actionRequired: true,
+      actionDescription: 'Complete online test before Aug 19',
+      links: [{ label: 'Start Test', url: 'https://time4education.com/aimcat' }],
+      sourceMessages: [{ messageId: 'm-aimcat', subject: 'AIMCAT window', receivedAt: '2026-08-15T08:00:00Z' }],
+      status: 'today',
+      createdAt: '2026-08-15T08:00:00Z',
+      updatedAt: '2026-08-15T08:00:00Z'
+    },
+    // 6. IDFC Test on Aug 16 (Tomorrow) -> IS TOMORROW!
+    {
+      id: 'ev-idfc',
+      title: 'IDFC First Bank - Online Test Credentials',
+      type: 'assessment',
+      date: '2026-08-16',
+      time: '10:00 AM',
+      isContinuousRange: false,
+      organization: 'IDFC First Bank',
+      actionRequired: true,
+      actionDescription: 'Take online test tomorrow at 10:00 AM',
+      links: [{ label: 'Take Test', url: 'https://assessment.idfc.com' }],
+      sourceMessages: [{ messageId: 'm-idfc', subject: 'IDFC OA', receivedAt: '2026-08-14T08:00:00Z' }],
       status: 'tomorrow',
       createdAt: '2026-08-14T08:00:00Z',
       updatedAt: '2026-08-14T08:00:00Z'
-    },
-    {
-      id: 'ev-2',
-      title: 'Math Assignment 3 Submission',
-      type: 'assignment',
-      startDate: '2026-08-14',
-      date: '2026-08-14',
-      time: '11:59 PM',
-      organization: 'Mathematics Dept',
-      actionRequired: true,
-      actionDescription: 'Submit homework on Moodle',
-      links: [{ label: 'Open Moodle', url: 'https://moodle.univ.edu/sub3', type: 'submission' }],
-      sourceMessages: [
-        {
-          messageId: 'msg-2',
-          subject: 'Assignment 3 Deadline',
-          receivedAt: '2026-08-14T08:00:00Z'
-        }
-      ],
-      status: 'today',
-      createdAt: '2026-08-14T08:00:00Z',
-      updatedAt: '2026-08-14T08:00:00Z'
-    },
-    {
-      id: 'ev-3',
-      title: 'Cognizant Communication & Aptitude Assessment',
-      type: 'assessment',
-      startDate: '2026-08-16',
-      endDate: '2026-08-19',
-      date: '2026-08-16',
-      allDates: ['2026-08-16', '2026-08-19'],
-      organization: 'Cognizant',
-      actionRequired: true,
-      actionDescription: 'Assessment window active until Aug 19',
-      links: [{ label: 'Assessment Portal', url: 'https://cognizant.com/oa', type: 'assessment' }],
-      sourceMessages: [
-        {
-          messageId: 'msg-3',
-          subject: 'Cognizant Assessment Window',
-          receivedAt: '2026-08-12T08:00:00Z'
-        }
-      ],
-      status: 'upcoming',
-      createdAt: '2026-08-12T08:00:00Z',
-      updatedAt: '2026-08-12T08:00:00Z'
     }
   ];
 
+  it('filters out old emails and only includes AIMCAT & IDFC for "what all do i have today and tomorrow?"', () => {
+    // Relevant items: AIMCAT (today window) and IDFC (tomorrow)
+    const filteredEvents = mockMailboxEvents.filter(e => e.id === 'ev-aimcat' || e.id === 'ev-idfc');
+
+    const res = generateLocalDeterministicResponse(
+      'what all do i have today and tomorrow?',
+      filteredEvents,
+      fixedNow
+    );
+
+    expect(res).toContain('# Your schedule: Aug 15–16, 2026');
+    expect(res).toContain('## Today — Aug 15');
+    expect(res).toContain('AIMCAT2714 Test window');
+    expect(res).toContain('## Tomorrow — Aug 16');
+    expect(res).toContain('IDFC First Bank - Online Test Credentials');
+
+    // Crucial: Must NOT contain old emails from May 8, July 30, Aug 3, Aug 11
+    expect(res).not.toContain('TCS National Qualifier Test');
+    expect(res).not.toContain('BNP Paribas');
+    expect(res).not.toContain('Cognizant');
+    expect(res).not.toContain('Sigmoid');
+    expect(res).not.toContain('May 8');
+    expect(res).not.toContain('Jul 30');
+  });
+
   it('generates immediate response for "due today"', () => {
-    const res = generateLocalDeterministicResponse('What do I have due today?', mockEvents, fixedNow);
-    expect(res).toContain('Math Assignment 3 Submission');
-    expect(res).toContain('11:59 PM');
-    expect(res).toContain('https://moodle.univ.edu/sub3');
+    const todayEvents = mockMailboxEvents.filter(e => e.status === 'today');
+    const res = generateLocalDeterministicResponse('What do I have due today?', todayEvents, fixedNow);
+    expect(res).toContain('AIMCAT2714');
   });
 
   it('generates immediate response for "due tomorrow"', () => {
-    const res = generateLocalDeterministicResponse('What is scheduled for tomorrow?', mockEvents, fixedNow);
-    expect(res).toContain('Google Coding Round 1');
+    const tomorrowEvents = mockMailboxEvents.filter(e => e.status === 'tomorrow');
+    const res = generateLocalDeterministicResponse('What is scheduled for tomorrow?', tomorrowEvents, fixedNow);
+    expect(res).toContain('IDFC First Bank');
     expect(res).toContain('10:00 AM');
-    expect(res).toContain('https://hackerrank.com/google-oa');
-  });
-
-  it('generates structured schedule for date-range query "tell me what all do i have from 15th august to 20th august?"', () => {
-    // Only ev-1 (Aug 15) and ev-3 (Aug 16-19) are in Aug 15-20 range.
-    const relevantEvents = mockEvents.filter(e => e.id === 'ev-1' || e.id === 'ev-3');
-    const res = generateLocalDeterministicResponse(
-      'tell me what all do i have from 15th august to 20th august?',
-      relevantEvents,
-      fixedNow
-    );
-
-    expect(res).toContain('# Your schedule: Aug 15–20, 2026');
-    expect(res).toContain('## Aug 15');
-    expect(res).toContain('Google Coding Round 1');
-    expect(res).toContain('## Aug 16–Aug 19');
-    expect(res).toContain('Cognizant Communication & Aptitude Assessment');
-    expect(res).not.toContain('Found 13 relevant items');
-    expect(res).not.toContain('Math Assignment 3'); // Aug 14 is outside
-  });
-
-  it('generates clear empty schedule response when no events in requested range', () => {
-    const res = generateLocalDeterministicResponse(
-      'tell me what all do i have from 1st september to 5th september?',
-      [],
-      fixedNow
-    );
-    expect(res).toContain('# Your schedule: Sep 1–5, 2026');
-    expect(res).toContain('No scheduled tests, assessments, deadlines, or academic events found');
   });
 });

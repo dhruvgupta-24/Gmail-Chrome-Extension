@@ -108,7 +108,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
 
         <div className="flex items-center gap-1.5">
           <Clock className="w-3.5 h-3.5 shrink-0 text-slate-400" />
-          <span>{formatHumanDate(event.date, event.time)}</span>
+          <span>{formatHumanDate(event.date || event.startDate, event.time, event.endDate, event.isContinuousRange)}</span>
         </div>
       </div>
 

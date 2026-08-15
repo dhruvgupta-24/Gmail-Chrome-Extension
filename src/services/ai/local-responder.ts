@@ -1,9 +1,9 @@
 import { ExtractedEvent, DateRangeQuery } from '../../types/events';
-import { parseQueryDateRange } from '../extraction/date-parser';
+import { parseQueryDateRange, toDateString } from '../extraction/date-parser';
 import { deduplicateEvents } from '../../storage/local-search';
 
 /**
- * Formats ISO date "YYYY-MM-DD" to human readable "Aug 15" or "Aug 15, 2026".
+ * Formats ISO date "YYYY-MM-DD" to human readable "Aug 15".
  */
 function formatHeadingDate(dateStr?: string): string {
   if (!dateStr) return 'Unspecified Date';
@@ -20,17 +20,21 @@ function formatHeadingDate(dateStr?: string): string {
 /**
  * Formats a single or multi-day event range label (e.g. "Aug 15" or "Aug 15–19").
  */
-function formatEventDateRange(startDate?: string, endDate?: string): string {
-  if (!startDate && !endDate) return 'Date not specified';
-  if (startDate && (!endDate || endDate === startDate)) {
-    return formatHeadingDate(startDate);
+function formatEventDateRange(ev: ExtractedEvent): string {
+  if (ev.isContinuousRange && ev.startDate && ev.endDate) {
+    return `${formatHeadingDate(ev.startDate)}–${formatHeadingDate(ev.endDate)}`;
   }
-  return `${formatHeadingDate(startDate)}–${formatHeadingDate(endDate)}`;
+  if (ev.allDates && ev.allDates.length > 1) {
+    return ev.allDates.map(d => formatHeadingDate(d)).join(', ');
+  }
+  if (ev.deadline) {
+    return `Deadline: ${formatHeadingDate(ev.deadline.split(' ')[0])}`;
+  }
+  return formatHeadingDate(ev.date || ev.startDate);
 }
 
 /**
- * Generates an instantaneous, grounded response directly from local extracted events
- * when local query intent matches perfectly or when local LLM is starting/idle.
+ * Generates an instantaneous, grounded response directly from local extracted events.
  */
 export function generateLocalDeterministicResponse(
   query: string,
@@ -42,7 +46,76 @@ export function generateLocalDeterministicResponse(
   const dateRange = detectedRange || parseQueryDateRange(query, nowDate);
   const dedupedEvents = deduplicateEvents(events);
 
-  // 1. Explicit Date Range Query (e.g. "tell me what all do i have from 15th august to 20th august?")
+  // 1. "Today and Tomorrow" Query
+  if (dateRange.isDateQuery && dateRange.isTodayAndTomorrow) {
+    const todayStr = toDateString(nowDate);
+    const tomDate = new Date(nowDate);
+    tomDate.setDate(tomDate.getDate() + 1);
+    const tomStr = toDateString(tomDate);
+
+    const todayEvents = dedupedEvents.filter(e =>
+      (e.isContinuousRange && e.startDate && e.endDate && todayStr >= e.startDate && todayStr <= e.endDate) ||
+      (e.allDates && e.allDates.includes(todayStr)) ||
+      (e.date === todayStr) ||
+      (e.deadline && e.deadline.startsWith(todayStr)) ||
+      e.status === 'today'
+    );
+
+    const tomorrowEvents = dedupedEvents.filter(e =>
+      (e.isContinuousRange && e.startDate && e.endDate && tomStr >= e.startDate && tomStr <= e.endDate) ||
+      (e.allDates && e.allDates.includes(tomStr)) ||
+      (e.date === tomStr) ||
+      (e.deadline && e.deadline.startsWith(tomStr)) ||
+      e.status === 'tomorrow'
+    );
+
+    const rangeHeader = `# Your schedule: ${dateRange.label || `${formatHeadingDate(todayStr)}–${formatHeadingDate(tomStr)}`}`;
+
+    if (todayEvents.length === 0 && tomorrowEvents.length === 0) {
+      return `${rangeHeader}\n\nNo scheduled tests, assessments, deadlines, or academic events found for today or tomorrow.`;
+    }
+
+    let res = `${rangeHeader}\n\n`;
+
+    // Today Section
+    res += `## Today — ${formatHeadingDate(todayStr)}\n`;
+    if (todayEvents.length === 0) {
+      res += `No scheduled events or deadlines for today.\n\n`;
+    } else {
+      todayEvents.forEach(ev => {
+        const orgStr = ev.company || ev.organization ? ` (${ev.company || ev.organization})` : '';
+        const dateSpan = formatEventDateRange(ev);
+        res += `- **${ev.title}**${orgStr}\n`;
+        res += `  - **Schedule**: ${dateSpan}${ev.time ? ` at ${ev.time}` : ''}\n`;
+        if (ev.actionDescription) res += `  - **Action Required**: ${ev.actionDescription}\n`;
+        if (ev.links.length > 0) {
+          res += `  - **Link**: [${ev.links[0].label}](${ev.links[0].url})\n`;
+        }
+      });
+      res += '\n';
+    }
+
+    // Tomorrow Section
+    res += `## Tomorrow — ${formatHeadingDate(tomStr)}\n`;
+    if (tomorrowEvents.length === 0) {
+      res += `No scheduled events or deadlines for tomorrow.\n`;
+    } else {
+      tomorrowEvents.forEach(ev => {
+        const orgStr = ev.company || ev.organization ? ` (${ev.company || ev.organization})` : '';
+        const dateSpan = formatEventDateRange(ev);
+        res += `- **${ev.title}**${orgStr}\n`;
+        res += `  - **Schedule**: ${dateSpan}${ev.time ? ` at ${ev.time}` : ''}\n`;
+        if (ev.actionDescription) res += `  - **Action Required**: ${ev.actionDescription}\n`;
+        if (ev.links.length > 0) {
+          res += `  - **Link**: [${ev.links[0].label}](${ev.links[0].url})\n`;
+        }
+      });
+    }
+
+    return res.trim();
+  }
+
+  // 2. Generic Date Range Query (e.g. Aug 15–20)
   if (dateRange.isDateQuery && dateRange.startDate && dateRange.endDate) {
     const rangeHeader = `# Your schedule: ${dateRange.label || `${formatHeadingDate(dateRange.startDate)}–${formatHeadingDate(dateRange.endDate)}`}`;
 
@@ -55,7 +128,7 @@ export function generateLocalDeterministicResponse(
     // Group events by day or multi-day window
     const groups = new Map<string, ExtractedEvent[]>();
     for (const ev of dedupedEvents) {
-      const heading = formatEventDateRange(ev.startDate || ev.date, ev.endDate);
+      const heading = formatEventDateRange(ev);
       if (!groups.has(heading)) groups.set(heading, []);
       groups.get(heading)!.push(ev);
     }
@@ -79,12 +152,12 @@ export function generateLocalDeterministicResponse(
     return res.trim();
   }
 
-  // 2. Empty check for non-date queries
+  // 3. Non-date empty check
   if (dedupedEvents.length === 0) {
-    return 'I searched your indexed mailbox and found no relevant upcoming deadlines, tests, or action items matching this request. You can click **Sync** in the top bar to fetch any newly arrived emails.';
+    return 'I searched your indexed mailbox and found no relevant upcoming deadlines, tests, or action items matching this request. You can click **Sync** in the top bar to fetch newly arrived emails.';
   }
 
-  // 3. Due Today Query
+  // 4. Due Today Query
   if (lower.includes('today') || lower.includes('due today')) {
     const todayEvents = dedupedEvents.filter(e => e.status === 'today');
     if (todayEvents.length === 0) {
@@ -102,7 +175,7 @@ export function generateLocalDeterministicResponse(
     return res.trim();
   }
 
-  // 4. Due Tomorrow Query
+  // 5. Due Tomorrow Query
   if (lower.includes('tomorrow') || lower.includes('due tomorrow')) {
     const tomorrowEvents = dedupedEvents.filter(e => e.status === 'tomorrow');
     if (tomorrowEvents.length === 0) {
@@ -120,11 +193,11 @@ export function generateLocalDeterministicResponse(
     return res.trim();
   }
 
-  // 5. Tests & Assessments Query
+  // 6. Tests & Assessments Query
   if (lower.includes('test') || lower.includes('quiz') || lower.includes('exam') || lower.includes('assessment')) {
     let res = `### Upcoming Tests & Assessments (${dedupedEvents.length})\n\n`;
     dedupedEvents.forEach((ev, i) => {
-      const dateLabel = formatEventDateRange(ev.startDate || ev.date, ev.endDate);
+      const dateLabel = formatEventDateRange(ev);
       res += `${i + 1}. **${ev.title}**\n`;
       res += `   • **Date**: ${dateLabel}${ev.time ? ` at ${ev.time}` : ''}\n`;
       if (ev.company || ev.organization) res += `   • **Organization**: ${ev.company || ev.organization}\n`;
@@ -135,10 +208,10 @@ export function generateLocalDeterministicResponse(
     return res.trim();
   }
 
-  // 6. General listing
+  // 7. General listing
   let res = `### Relevant Items Found (${dedupedEvents.length})\n\n`;
   dedupedEvents.slice(0, 6).forEach((ev, i) => {
-    const dateLabel = formatEventDateRange(ev.startDate || ev.date, ev.endDate);
+    const dateLabel = formatEventDateRange(ev);
     res += `${i + 1}. **${ev.title}** (${dateLabel})\n`;
     if (ev.actionDescription) res += `   • ${ev.actionDescription}\n`;
     if (ev.links.length > 0) res += `   • Direct Link: [${ev.links[0].label}](${ev.links[0].url})\n`;

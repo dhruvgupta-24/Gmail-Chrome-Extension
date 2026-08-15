@@ -2,7 +2,7 @@ import { getDatabase } from './database';
 import { ExtractedEvent, DateRangeQuery } from '../types/events';
 import { calculateEventStatus, parseQueryDateRange, isEventInRange } from '../services/extraction/date-parser';
 import { ParsedEmailMessage } from '../types/gmail';
-import { cleanEventTitle, mergeEvents } from '../services/extraction/event-extractor';
+import { mergeEvents, normalizeTitleForDeduplication } from '../services/extraction/event-extractor';
 
 export interface LocalSearchResult {
   events: ExtractedEvent[];
@@ -13,28 +13,52 @@ export interface LocalSearchResult {
 }
 
 /**
- * Deduplicates a list of events by threadId or (company + cleanTitle + startDate).
+ * Deduplicates events across threads, forwarded copies, and multiple announcement messages.
+ * Matches by threadId, normalized title + organization, or normalized title + date.
  */
 export function deduplicateEvents(events: ExtractedEvent[]): ExtractedEvent[] {
   const byKey = new Map<string, ExtractedEvent>();
 
   for (const ev of events) {
-    const cleanTitle = cleanEventTitle(ev.title).toLowerCase();
-    const company = (ev.company || ev.organization || '').toLowerCase();
-    const dateKey = ev.startDate || ev.date || 'no-date';
+    const normTitle = normalizeTitleForDeduplication(ev.title);
+    const org = (ev.company || ev.organization || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const dateKey = ev.date || ev.startDate || 'any';
 
-    // Primary key: threadId if available
-    let key = ev.threadId ? `thread-${ev.threadId}` : '';
-    if (!key) {
-      // Secondary key: company + cleanTitle + dateKey
-      key = `${company}::${cleanTitle}::${dateKey}`;
+    // 1. Thread Key
+    const threadKey = ev.threadId ? `th_${ev.threadId}` : '';
+
+    // 2. Semantic Content Key (Organization + Normalized Title)
+    const contentKey = `content_${org}_${normTitle}`;
+
+    // Check if an event already exists with this threadKey or contentKey
+    let matchedKey: string | null = null;
+    if (threadKey && byKey.has(threadKey)) {
+      matchedKey = threadKey;
+    } else if (byKey.has(contentKey)) {
+      matchedKey = contentKey;
+    } else {
+      // Check for partial title overlap if titles are long
+      for (const [k, existing] of byKey.entries()) {
+        const existingNorm = normalizeTitleForDeduplication(existing.title);
+        const existingOrg = (existing.company || existing.organization || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        if (
+          (org && existingOrg && org === existingOrg && (normTitle.includes(existingNorm) || existingNorm.includes(normTitle))) ||
+          (normTitle.length > 15 && normTitle === existingNorm)
+        ) {
+          matchedKey = k;
+          break;
+        }
+      }
     }
 
-    if (byKey.has(key)) {
-      const existing = byKey.get(key)!;
-      byKey.set(key, mergeEvents(existing, ev));
+    if (matchedKey) {
+      const existing = byKey.get(matchedKey)!;
+      const merged = mergeEvents(existing, ev);
+      byKey.set(matchedKey, merged);
     } else {
-      byKey.set(key, ev);
+      const keyToUse = threadKey || contentKey || `ev_${normTitle}_${dateKey}`;
+      byKey.set(keyToUse, ev);
     }
   }
 
@@ -56,20 +80,24 @@ export async function searchLocalDatabase(
 
   // 1. Refresh dynamic status for all events relative to now
   const activeEvents = allEvents.map(event => {
-    const currentStatus = calculateEventStatus(event.startDate || event.date, nowDate, event.endDate);
+    const currentStatus = calculateEventStatus(
+      event.date,
+      nowDate,
+      event.endDate,
+      event.isContinuousRange,
+      event.allDates
+    );
     return {
       ...event,
       status: currentStatus !== 'unknown' ? currentStatus : event.status
     };
   });
 
-  // 2. First Priority: Check if query asks for a specific date or date range
+  // 2. First Priority: Check if query asks for a specific date or date range (e.g. "today and tomorrow")
   const dateRange = parseQueryDateRange(query, nowDate);
 
   if (dateRange.isDateQuery && dateRange.startDate && dateRange.endDate) {
-    console.log(`[Local Search] Date-range query detected: ${dateRange.startDate} to ${dateRange.endDate}`);
-
-    // Strictly filter events whose actual event window overlaps the requested range
+    // Strictly filter events whose actual event dates / window / deadline overlap the requested range
     const rangeMatchedEvents = activeEvents.filter(ev =>
       isEventInRange(ev, dateRange.startDate!, dateRange.endDate!)
     );
@@ -84,7 +112,6 @@ export async function searchLocalDatabase(
       return (a.time || '').localeCompare(b.time || '');
     });
 
-    // Gather corresponding source messages
     const matchingMessageIds = new Set<string>();
     for (const ev of dedupedRangeEvents) {
       for (const s of ev.sourceMessages) {
@@ -113,7 +140,7 @@ export async function searchLocalDatabase(
   const isCareerQuery = lowerQuery.includes('placement') || lowerQuery.includes('internship') || lowerQuery.includes('interview') || lowerQuery.includes('job');
 
   if (isTodayQuery) {
-    matchedEvents = activeEvents.filter(e => e.status === 'today' || (e.actionRequired && e.status !== 'past'));
+    matchedEvents = activeEvents.filter(e => e.status === 'today');
   } else if (isTomorrowQuery) {
     matchedEvents = activeEvents.filter(e => e.status === 'tomorrow');
   } else if (isTestsQuery) {
@@ -127,7 +154,7 @@ export async function searchLocalDatabase(
       ['placement', 'internship', 'interview', 'coding_round', 'ppt'].includes(e.type) && e.status !== 'past'
     );
   } else {
-    // General keyword search across title, organization, company, actionDescription, and type
+    // General keyword search
     const queryTokens = lowerQuery
       .replace(/[^\w\s]/g, '')
       .split(/\s+/)
@@ -149,10 +176,8 @@ export async function searchLocalDatabase(
     }
   }
 
-  // Deduplicate before returning
   const dedupedEvents = deduplicateEvents(matchedEvents);
 
-  // Sort chronologically if dates exist
   dedupedEvents.sort((a, b) => {
     if (a.startDate && b.startDate) return a.startDate.localeCompare(b.startDate);
     if (a.date && b.date) return a.date.localeCompare(b.date);

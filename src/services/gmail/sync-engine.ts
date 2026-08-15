@@ -65,7 +65,7 @@ export class SyncEngine {
         // 1. Cache raw parsed messages in local IndexedDB
         await saveCachedMessages(messages);
 
-        // 2. Extract structured events
+        // 2. Extract structured events using schema v2
         const extractedEvents: ExtractedEvent[] = [];
         for (const msg of messages) {
           const ev = extractEventFromEmail(msg, now);

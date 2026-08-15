@@ -1,7 +1,7 @@
 import { getDatabase } from './database';
 import { ExtractedEvent } from '../types/events';
 import { calculateEventStatus } from '../services/extraction/date-parser';
-import { mergeEvents } from '../services/extraction/event-extractor';
+import { mergeEvents, extractEventFromEmail, CURRENT_SCHEMA_VERSION } from '../services/extraction/event-extractor';
 import { deduplicateEvents } from './local-search';
 
 export interface BriefingData {
@@ -34,16 +34,58 @@ export async function saveEvents(events: ExtractedEvent[]): Promise<void> {
 }
 
 /**
- * Retrieves all events from IndexedDB, refreshing their dynamic status based on the current local date
- * and deduplicating thread replies.
+ * Re-indexes all events from locally cached raw Gmail messages to purge any legacy contaminated date ranges.
+ */
+export async function reindexAllEvents(nowDate: Date = new Date()): Promise<ExtractedEvent[]> {
+  const db = await getDatabase();
+  const allMessages = await db.getAll('cached_messages');
+
+  // Clear legacy events table
+  const clearTx = db.transaction('events', 'readwrite');
+  await clearTx.objectStore('events').clear();
+  await clearTx.done;
+
+  if (allMessages.length === 0) {
+    return [];
+  }
+
+  const cleanEvents: ExtractedEvent[] = [];
+  for (const msg of allMessages) {
+    const ev = extractEventFromEmail(msg, nowDate);
+    if (ev) {
+      cleanEvents.push(ev);
+    }
+  }
+
+  const deduped = deduplicateEvents(cleanEvents);
+  await saveEvents(deduped);
+  return deduped;
+}
+
+/**
+ * Retrieves all events from IndexedDB, refreshing their dynamic status based on the current local date,
+ * invalidating legacy schema events if found, and deduplicating thread replies and forward copies.
  */
 export async function getAllEvents(nowDate: Date = new Date()): Promise<ExtractedEvent[]> {
   const db = await getDatabase();
   const all = await db.getAll('events');
 
+  // Auto-migration check: If any event is from schema version 1 (or missing schemaVersion), trigger re-index
+  const hasLegacyEvents = all.some(e => !e.schemaVersion || e.schemaVersion < CURRENT_SCHEMA_VERSION);
+  if (hasLegacyEvents) {
+    console.log('[Events Store] Legacy schema events detected, re-indexing from cached messages...');
+    return await reindexAllEvents(nowDate);
+  }
+
   // Refresh status relative to now
   const refreshed = all.map(event => {
-    const currentStatus = calculateEventStatus(event.startDate || event.date, nowDate, event.endDate);
+    const currentStatus = calculateEventStatus(
+      event.date,
+      nowDate,
+      event.endDate,
+      event.isContinuousRange,
+      event.allDates
+    );
     return {
       ...event,
       status: currentStatus !== 'unknown' ? currentStatus : event.status

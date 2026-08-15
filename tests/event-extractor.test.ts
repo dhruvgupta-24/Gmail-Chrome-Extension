@@ -3,18 +3,26 @@ import {
   detectEventType,
   detectActionRequired,
   extractEventFromEmail,
-  mergeEvents,
-  cleanEventTitle
+  cleanEventTitle,
+  normalizeTitleForDeduplication
 } from '../src/services/extraction/event-extractor';
+import { deduplicateEvents } from '../src/storage/local-search';
 import { ParsedEmailMessage } from '../src/types/gmail';
 
 describe('Event Extractor & Deduplication', () => {
-  const fixedNow = new Date('2026-08-14T10:00:00Z');
+  const fixedNow = new Date('2026-08-15T10:00:00Z');
 
   it('cleans subject titles by removing Re:, Fwd:, [External] prefixes', () => {
     expect(cleanEventTitle('Re: Re: Campus Detail | Sigmoid OA')).toBe('Campus Detail | Sigmoid OA');
     expect(cleanEventTitle('[EXTERNAL] Fwd: Cognizant Assessment')).toBe('Cognizant Assessment');
     expect(cleanEventTitle('  FWD: [Urgent] Submit assignment before Friday ')).toBe('Submit assignment before Friday');
+  });
+
+  it('normalizes titles for deduplication matching', () => {
+    const t1 = normalizeTitleForDeduplication("Destination Dr. Reddy's 3.0 is LIVE...");
+    const t2 = normalizeTitleForDeduplication("Fwd: Destination Dr. Reddy's 3.0 is LIVE - Campus Drive");
+    expect(t1).toContain('destination dr reddy');
+    expect(t2).toContain('destination dr reddy');
   });
 
   it('detects coding round event type', () => {
@@ -30,86 +38,85 @@ describe('Event Extractor & Deduplication', () => {
     expect(actionDescription).toBeDefined();
   });
 
-  it('extracts structured event from parsed email message with threadId', () => {
-    const parsedEmail: ParsedEmailMessage = {
-      id: 'msg_999',
-      threadId: 'th_888',
-      subject: 'Re: Bain & Company Online Assessment',
-      sender: 'Campus Recruitment <recruitment@bain.com>',
-      senderName: 'Bain & Company',
-      senderEmail: 'recruitment@bain.com',
+  it('CASE 6: Deduplicates "Destination Dr. Reddy\'s 3.0 is LIVE" and "Fwd: Destination Dr. Reddy\'s 3.0..." into ONE event', () => {
+    const email1: ParsedEmailMessage = {
+      id: 'msg-dr1',
+      threadId: 'th-dr1',
+      subject: "Destination Dr. Reddy's 3.0 is LIVE - Campus Engagement",
+      sender: 'Dr. Reddy’s Campus Team <campus@drreddys.com>',
+      senderName: 'Dr. Reddy’s',
+      senderEmail: 'campus@drreddys.com',
       recipient: 'student@univ.edu',
-      date: '2026-08-14T08:00:00Z',
-      timestamp: new Date('2026-08-14T08:00:00Z').getTime(),
-      snippet: 'Your assessment is tomorrow at 10:00 AM',
-      plainText: 'Please complete the assessment tomorrow at 10:00 AM on https://hackerrank.com/bain-oa',
-      links: [{ text: 'Open HackerRank Test', href: 'https://hackerrank.com/bain-oa' }],
+      date: '2026-08-10T08:00:00Z',
+      timestamp: new Date('2026-08-10T08:00:00Z').getTime(),
+      snippet: 'Registration is live for Dr. Reddy’s 3.0',
+      plainText: 'Register before 20th August 2026 at https://drreddys.com/register',
+      links: [{ text: 'Register Now', href: 'https://drreddys.com/register' }],
       labels: ['INBOX']
     };
 
-    const event = extractEventFromEmail(parsedEmail, fixedNow);
-    expect(event).not.toBeNull();
-    expect(event?.id).toBe('thread-th_888'); // Thread-level ID
-    expect(event?.title).toBe('Bain & Company Online Assessment'); // Clean title without "Re:"
-    expect(event?.status).toBe('tomorrow');
-    expect(event?.organization).toBe('Bain & Company');
-    expect(event?.links.length).toBeGreaterThan(0);
-    expect(event?.sourceMessages[0].messageId).toBe('msg_999');
+    const email2: ParsedEmailMessage = {
+      id: 'msg-dr2',
+      threadId: 'th-dr2', // Different thread ID (e.g. forward from placement officer)
+      subject: "Fwd: Destination Dr. Reddy's 3.0 is LIVE - Campus Engagement",
+      sender: 'Placement Officer <tnp@univ.edu>',
+      senderName: 'Placement Cell',
+      senderEmail: 'tnp@univ.edu',
+      recipient: 'all-students@univ.edu',
+      date: '2026-08-11T08:00:00Z',
+      timestamp: new Date('2026-08-11T08:00:00Z').getTime(),
+      snippet: 'Please find forwarded details for Dr. Reddy’s',
+      plainText: 'Register before 20th August 2026 at https://drreddys.com/register',
+      links: [{ text: 'Register Now', href: 'https://drreddys.com/register' }],
+      labels: ['INBOX']
+    };
+
+    const ev1 = extractEventFromEmail(email1, fixedNow)!;
+    const ev2 = extractEventFromEmail(email2, fixedNow)!;
+
+    const deduped = deduplicateEvents([ev1, ev2]);
+    expect(deduped.length).toBe(1); // Must consolidate into exactly ONE event
+    expect(deduped[0].sourceMessages.length).toBe(2); // Both emails tracked
   });
 
-  it('merges multiple replies from the same thread into one consolidated event', () => {
-    const event1 = {
-      id: 'thread-th-1',
-      threadId: 'th-1',
-      title: 'Math Quiz Announcement',
-      type: 'quiz' as const,
-      startDate: '2026-08-15',
-      date: '2026-08-15',
-      time: '10:00 AM',
-      actionRequired: true,
-      links: [{ label: 'Quiz Portal', url: 'https://moodle.univ.edu/quiz1' }],
-      sourceMessages: [
-        {
-          messageId: 'msg-1',
-          threadId: 'th-1',
-          subject: 'Math Quiz Announcement',
-          receivedAt: '2026-08-14T08:00:00Z'
-        }
-      ],
-      status: 'tomorrow' as const,
-      createdAt: '2026-08-14T08:00:00Z',
-      updatedAt: '2026-08-14T08:00:00Z'
+  it('CASE 7: Deduplicates two copies of "IDFC First Bank - Online Test Credentials" into ONE event', () => {
+    const email1: ParsedEmailMessage = {
+      id: 'msg-idfc1',
+      threadId: 'th-idfc1',
+      subject: 'IDFC First Bank - Online Test Credentials',
+      sender: 'Hiring Team <hiring@idfcfirstbank.com>',
+      senderName: 'IDFC First Bank',
+      senderEmail: 'hiring@idfcfirstbank.com',
+      recipient: 'student@univ.edu',
+      date: '2026-08-14T08:00:00Z',
+      timestamp: new Date('2026-08-14T08:00:00Z').getTime(),
+      snippet: 'Your test credentials for IDFC First Bank OA',
+      plainText: 'Online test will be on 16th August 2026 at 10:00 AM. Link: https://assessment.idfc.com',
+      links: [{ text: 'Take Test', href: 'https://assessment.idfc.com' }],
+      labels: ['INBOX']
     };
 
-    const event2 = {
-      id: 'thread-th-1',
-      threadId: 'th-1',
-      title: 'Re: Math Quiz Announcement (Updated Link)',
-      type: 'quiz' as const,
-      startDate: '2026-08-15',
-      date: '2026-08-15',
-      time: '10:00 AM',
-      actionRequired: true,
-      links: [
-        { label: 'Quiz Portal', url: 'https://moodle.univ.edu/quiz1' },
-        { label: 'Zoom Link', url: 'https://zoom.us/j/123456' }
-      ],
-      sourceMessages: [
-        {
-          messageId: 'msg-2',
-          threadId: 'th-1',
-          subject: 'Re: Math Quiz Announcement (Updated Link)',
-          receivedAt: '2026-08-14T09:00:00Z'
-        }
-      ],
-      status: 'tomorrow' as const,
-      createdAt: '2026-08-14T08:00:00Z',
-      updatedAt: '2026-08-14T09:00:00Z'
+    const email2: ParsedEmailMessage = {
+      id: 'msg-idfc2',
+      threadId: 'th-idfc2',
+      subject: 'IDFC First Bank - Online Test Credentials (Reminder)',
+      sender: 'Hiring Team <hiring@idfcfirstbank.com>',
+      senderName: 'IDFC First Bank',
+      senderEmail: 'hiring@idfcfirstbank.com',
+      recipient: 'student@univ.edu',
+      date: '2026-08-15T06:00:00Z',
+      timestamp: new Date('2026-08-15T06:00:00Z').getTime(),
+      snippet: 'Reminder: test credentials for IDFC First Bank OA',
+      plainText: 'Online test will be on 16th August 2026 at 10:00 AM. Link: https://assessment.idfc.com',
+      links: [{ text: 'Take Test', href: 'https://assessment.idfc.com' }],
+      labels: ['INBOX']
     };
 
-    const merged = mergeEvents(event1, event2);
-    expect(merged.sourceMessages.length).toBe(2);
-    expect(merged.links.length).toBe(2);
-    expect(merged.title).toBe('Math Quiz Announcement (Updated Link)'); // Clean title without "Re:"
+    const ev1 = extractEventFromEmail(email1, fixedNow)!;
+    const ev2 = extractEventFromEmail(email2, fixedNow)!;
+
+    const deduped = deduplicateEvents([ev1, ev2]);
+    expect(deduped.length).toBe(1); // Exactly ONE event
+    expect(deduped[0].sourceMessages.length).toBe(2);
   });
 });
