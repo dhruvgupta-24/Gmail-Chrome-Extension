@@ -13,30 +13,27 @@ export function buildSystemPrompt(userContextPrompt: string, nowDate: Date = new
     minute: '2-digit'
   });
 
-  return `You are a personal Gmail AI Assistant inside Google Chrome.
+  return `You are a personal Gmail AI Assistant inside Google Chrome, modeled after high-quality smart email assistants like Shortwave.
 Current Reference Time: ${localDateStr} at ${localTimeStr} (Local Time).
 
 USER CONTEXT & PRIORITIES:
 ${userContextPrompt}
 
 STRICT OPERATIONAL GUIDELINES:
-1. Grounding & Anti-Hallucination: Answer ONLY using the provided emails and extracted events. If a date, time, link, or instruction is not present in the retrieved emails, state clearly that it is not specified. NEVER invent or assume deadlines, test links, or email senders.
-2. Date-Range Queries: When the user asks for a date range (e.g. "from 15th August to 20th August"):
-   - Filter and include ONLY events whose actual event dates / assessment windows overlap the requested range.
-   - The email received/sent date must NEVER be treated as the event date.
-   - Format the response with a clean schedule header, e.g.:
-     # Your schedule: Aug 15–20, 2026
-     ## Aug 15
-     - **Event Title** (Company)
-       - Details, time, actions, links
-     ## Aug 15–19
-     - **Cognizant Assessment**
-       - Window: Aug 15–19
-   - If no events are scheduled in that range, explicitly state that no events were found for that period.
-3. No Raw Meta Dump: Never start your response with "Found X relevant items" or robotic retrieval summaries. Jump straight into the organized answer.
-4. Thread Deduplication: Do not show repeated "Re:" or multiple copies of the same thread/event. Provide one consolidated summary per unique event.
-5. Action Links & Traceability: When discussing tests or forms, reference the specific action link or mention that it is available in the email.
-6. Tone: Calm, concise, professional, clear. Avoid unnecessary fluff or robotic boilerplate. Use clean Markdown formatting.`;
+1. Natural & Grounded Tone: Speak like a smart, proactive personal assistant summarizing the inbox. Answer ONLY using the provided structured events and emails. If a detail is missing, state clearly that it is not specified. NEVER invent deadlines or links.
+2. Intelligent Schedule Summaries (No Duplicate Robotic Dumps):
+   - For "Today and Tomorrow" queries:
+     - Today: Mention tests/assessments starting or active today, deadlines due today, or meetings.
+     - Tomorrow: Mention any NEW event starting or due tomorrow. If no new events start tomorrow, state: "Nothing specifically scheduled for tomorrow." If an active test window from today continues tomorrow, mention it naturally: "The [Test Name] test window will still remain open."
+     - DO NOT blindly copy-paste the exact same event as a duplicate card under both days!
+     - Optional "Coming Up Soon": If there are 1–2 important deadlines or exams shortly after tomorrow (within 7 days), list them concisely under "Coming Up Soon".
+3. Conversational Clarity over Database Dumps:
+   - Instead of "Schedule: Aug 15–Aug 19", say: "The test can be taken anytime between August 15 and August 19."
+   - Instead of "Deadline: 2026-08-20 at 11:59 PM", say: "Registration closes on August 20 at 11:59 PM."
+4. Action Links:
+   - When referencing portal/test links, format cleanly as [Open Test Portal](url) or [Registration Form](url). Never dump raw social media links (Instagram, Facebook, etc.).
+5. Thread Deduplication: Never display duplicate "Re:" replies or forwarded copies of the same event. Consolidate them into one clear summary.
+6. Tone: Clean Markdown, concise, calm, and helpful. Avoid robot boilerplate like "Found X items" or "Here is the retrieved database info".`;
 }
 
 export function buildUserPromptWithContext(
@@ -50,16 +47,26 @@ export function buildUserPromptWithContext(
     contextBlock += '--- STRUCTURED EVENTS EXTRACTED FROM EMAILS ---\n';
     extractedEvents.slice(0, 10).forEach((ev, idx) => {
       const dateRangeStr = ev.startDate && ev.endDate && ev.startDate !== ev.endDate
-        ? `${ev.startDate} to ${ev.endDate}`
-        : ev.startDate || ev.date || 'Unspecified';
+        ? `${ev.startDate} to ${ev.endDate} (Continuous Active Window)`
+        : ev.allDates && ev.allDates.length > 1
+        ? `Discrete Dates: ${ev.allDates.join(', ')}`
+        : ev.deadline
+        ? `Deadline: ${ev.deadline}`
+        : ev.date || 'Unspecified';
+
+      // Filter social links
+      const actionLinks = ev.links.filter(l => {
+        const u = l.url.toLowerCase();
+        return !['instagram.com', 'facebook.com', 'twitter.com', 'youtube.com', 'linkedin.com'].some(s => u.includes(s));
+      });
 
       contextBlock += `[Event #${idx + 1}]
 Title: ${ev.title}
 Company/Organization: ${ev.company || ev.organization || 'N/A'}
 Type: ${ev.type}
-Event Date / Window: ${dateRangeStr} | Time: ${ev.time || 'Unspecified'} | Status: ${ev.status}
+Date Info: ${dateRangeStr} | Time: ${ev.time || 'Unspecified'} | Status: ${ev.status}
 Action Required: ${ev.actionRequired ? 'YES (' + (ev.actionDescription || 'See email') + ')' : 'NO'}
-Links: ${ev.links.map(l => `${l.label}: ${l.url}`).join(', ') || 'None'}
+Direct Action Links: ${actionLinks.map(l => `${l.label}: ${l.url}`).join(', ') || 'None'}
 Source Emails: ${ev.sourceMessages.map(s => `"${s.subject}" (Sent: ${s.receivedAt})`).join('; ')}
 \n`;
     });
@@ -73,8 +80,7 @@ Subject: ${em.subject}
 From: ${em.sender}
 Date Sent: ${em.date}
 Snippet: ${em.snippet}
-Content: ${em.plainText.substring(0, 1000)}
-Links: ${em.links.map(l => `${l.text} -> ${l.href}`).join('; ') || 'None'}
+Content: ${em.plainText.substring(0, 800)}
 \n`;
     });
   }
@@ -87,5 +93,5 @@ Links: ${em.links.map(l => `${l.text} -> ${l.href}`).join('; ') || 'None'}
 --- USER QUESTION ---
 ${userQuery}
 
-Provide a concise, grounded, and actionable response based on the above information following the formatting rules.`;
+Respond with a natural, smart, and concise summary following the Shortwave-style instructions.`;
 }

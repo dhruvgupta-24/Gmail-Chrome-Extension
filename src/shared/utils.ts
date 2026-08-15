@@ -1,5 +1,5 @@
 /**
- * Utility functions for date formatting, ID generation, text sanitization, and URL normalization.
+ * Utility functions for date formatting, ID generation, text sanitization, URL normalization, and Gmail navigation.
  */
 
 export function generateId(): string {
@@ -94,7 +94,26 @@ export function escapeHtml(unsafe: string): string {
  */
 export function getGmailLink(messageId: string, threadId?: string): string {
   const idToOpen = threadId || messageId;
-  return `https://mail.google.com/mail/u/0/#inbox/${encodeURIComponent(idToOpen)}`;
+  return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(idToOpen)}`;
+}
+
+/**
+ * Opens a Gmail message or thread in the CURRENT tab without opening new tabs.
+ * Leverages Gmail SPA hash routing to seamlessly navigate to the exact email.
+ */
+export function openGmailMessageInCurrentTab(messageId: string, threadId?: string): void {
+  const targetId = threadId || messageId;
+  if (!targetId) return;
+
+  const targetHash = `#all/${encodeURIComponent(targetId)}`;
+
+  if (typeof window !== 'undefined') {
+    if (window.location.hostname === 'mail.google.com') {
+      window.location.hash = targetHash;
+    } else {
+      window.location.href = `https://mail.google.com/mail/u/0/${targetHash}`;
+    }
+  }
 }
 
 /**

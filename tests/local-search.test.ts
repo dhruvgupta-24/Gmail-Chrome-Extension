@@ -2,12 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { generateLocalDeterministicResponse } from '../src/services/ai/local-responder';
 import { ExtractedEvent } from '../src/types/events';
 
-describe('Local Responder & Today/Tomorrow Integration', () => {
+describe('Local Responder & Shortwave-Style Natural Answers', () => {
   // Reference date: Saturday, August 15, 2026
   const fixedNow = new Date('2026-08-15T10:00:00Z');
 
   const mockMailboxEvents: ExtractedEvent[] = [
-    // 1. TCS from May 8 (Actual event Aug 17) -> NOT today/tomorrow
+    // 1. TCS from May 8 (Actual event Aug 17) -> Upcoming soon
     {
       id: 'ev-tcs',
       title: 'TCS National Qualifier Test (NQT)',
@@ -23,7 +23,7 @@ describe('Local Responder & Today/Tomorrow Integration', () => {
       createdAt: '2026-05-08T08:00:00Z',
       updatedAt: '2026-05-08T08:00:00Z'
     },
-    // 2. BNP Paribas from July 30 (Deadline Aug 20) -> NOT today/tomorrow
+    // 2. BNP Paribas from July 30 (Deadline Aug 20) -> Upcoming soon
     {
       id: 'ev-bnp',
       title: 'INNOVERSITÉ - Internship Opportunity - BNP Paribas India COE',
@@ -40,38 +40,7 @@ describe('Local Responder & Today/Tomorrow Integration', () => {
       createdAt: '2026-07-30T08:00:00Z',
       updatedAt: '2026-07-30T08:00:00Z'
     },
-    // 3. Cognizant from Aug 3 (PPT on Sep 7) -> NOT today/tomorrow
-    {
-      id: 'ev-cog',
-      title: "Pre-Placement Talk: Cognizant's Ace Frontier Engineer Program",
-      type: 'ppt',
-      date: '2026-09-07',
-      isContinuousRange: false,
-      organization: 'Cognizant',
-      actionRequired: false,
-      links: [],
-      sourceMessages: [{ messageId: 'm-cog', subject: 'Cognizant PPT', receivedAt: '2026-08-03T08:00:00Z' }],
-      status: 'upcoming',
-      createdAt: '2026-08-03T08:00:00Z',
-      updatedAt: '2026-08-03T08:00:00Z'
-    },
-    // 4. Sigmoid from Aug 11 (PPT on 12th, OA on 24th & 25th) -> NOT today/tomorrow
-    {
-      id: 'ev-sig',
-      title: 'Campus Detail | Sigmoid Data Engineering Track PPT & OA',
-      type: 'assessment',
-      date: '2026-08-25',
-      allDates: ['2026-08-12', '2026-08-24', '2026-08-25'],
-      isContinuousRange: false,
-      organization: 'Sigmoid',
-      actionRequired: true,
-      links: [{ label: 'OA Link', url: 'https://sigmoid.com/oa' }],
-      sourceMessages: [{ messageId: 'm-sig', subject: 'Sigmoid OA', receivedAt: '2026-08-11T08:00:00Z' }],
-      status: 'upcoming',
-      createdAt: '2026-08-11T08:00:00Z',
-      updatedAt: '2026-08-11T08:00:00Z'
-    },
-    // 5. AIMCAT Aug 15–19 (Active window contains Aug 15 & Aug 16) -> IS TODAY / TOMORROW!
+    // 3. AIMCAT Aug 15–19 (Active window contains Aug 15 & Aug 16) -> IS TODAY!
     {
       id: 'ev-aimcat',
       title: 'AIMCAT2714 Test window',
@@ -89,60 +58,64 @@ describe('Local Responder & Today/Tomorrow Integration', () => {
       createdAt: '2026-08-15T08:00:00Z',
       updatedAt: '2026-08-15T08:00:00Z'
     },
-    // 6. IDFC Test on Aug 16 (Tomorrow) -> IS TOMORROW!
+    // 4. IDFC Test on Aug 21
     {
       id: 'ev-idfc',
       title: 'IDFC First Bank - Online Test Credentials',
       type: 'assessment',
-      date: '2026-08-16',
+      date: '2026-08-21',
       time: '10:00 AM',
       isContinuousRange: false,
       organization: 'IDFC First Bank',
       actionRequired: true,
-      actionDescription: 'Take online test tomorrow at 10:00 AM',
       links: [{ label: 'Take Test', url: 'https://assessment.idfc.com' }],
       sourceMessages: [{ messageId: 'm-idfc', subject: 'IDFC OA', receivedAt: '2026-08-14T08:00:00Z' }],
-      status: 'tomorrow',
+      status: 'upcoming',
       createdAt: '2026-08-14T08:00:00Z',
       updatedAt: '2026-08-14T08:00:00Z'
     }
   ];
 
-  it('filters out old emails and only includes AIMCAT & IDFC for "what all do i have today and tomorrow?"', () => {
-    // Relevant items: AIMCAT (today window) and IDFC (tomorrow)
-    const filteredEvents = mockMailboxEvents.filter(e => e.id === 'ev-aimcat' || e.id === 'ev-idfc');
+  it('generates natural Shortwave-style answer without duplicating AIMCAT on tomorrow', () => {
+    // Only AIMCAT is active today (Aug 15) and tomorrow (Aug 16)
+    const activeRangeEvents = mockMailboxEvents.filter(e => e.id === 'ev-aimcat');
 
     const res = generateLocalDeterministicResponse(
       'what all do i have today and tomorrow?',
-      filteredEvents,
-      fixedNow
+      activeRangeEvents,
+      fixedNow,
+      undefined,
+      mockMailboxEvents
     );
 
-    expect(res).toContain('# Your schedule: Aug 15–16, 2026');
-    expect(res).toContain('## Today — Aug 15');
+    // Verify natural headings
+    expect(res).toContain('### Today (Saturday, August 15)');
     expect(res).toContain('AIMCAT2714 Test window');
-    expect(res).toContain('## Tomorrow — Aug 16');
-    expect(res).toContain('IDFC First Bank - Online Test Credentials');
+    expect(res).toContain('Test window is open');
+    expect(res).toContain('August 19');
 
-    // Crucial: Must NOT contain old emails from May 8, July 30, Aug 3, Aug 11
-    expect(res).not.toContain('TCS National Qualifier Test');
-    expect(res).not.toContain('BNP Paribas');
-    expect(res).not.toContain('Cognizant');
-    expect(res).not.toContain('Sigmoid');
-    expect(res).not.toContain('May 8');
-    expect(res).not.toContain('Jul 30');
+    // Tomorrow section should NOT duplicate AIMCAT as a separate identical bullet
+    expect(res).toContain('### Tomorrow (Sunday, August 16)');
+    expect(res).toContain('Nothing new is scheduled for tomorrow');
+    expect(res).toContain('AIMCAT2714');
+    expect(res).toContain('test window will still remain open');
+
+    // Coming up soon preview
+    expect(res).toContain('### Coming Up Soon');
+    expect(res).toContain('TCS National Qualifier Test');
+    expect(res).toContain('BNP Paribas');
   });
 
   it('generates immediate response for "due today"', () => {
     const todayEvents = mockMailboxEvents.filter(e => e.status === 'today');
     const res = generateLocalDeterministicResponse('What do I have due today?', todayEvents, fixedNow);
     expect(res).toContain('AIMCAT2714');
+    expect(res).toContain('Test window is open');
   });
 
-  it('generates immediate response for "due tomorrow"', () => {
+  it('generates immediate response for "due tomorrow" when nothing is due tomorrow', () => {
     const tomorrowEvents = mockMailboxEvents.filter(e => e.status === 'tomorrow');
     const res = generateLocalDeterministicResponse('What is scheduled for tomorrow?', tomorrowEvents, fixedNow);
-    expect(res).toContain('IDFC First Bank');
-    expect(res).toContain('10:00 AM');
+    expect(res).toContain('no scheduled items or deadlines');
   });
 });

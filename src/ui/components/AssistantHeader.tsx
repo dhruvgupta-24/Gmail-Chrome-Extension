@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sparkles, RefreshCw, Settings, X, Inbox, MessageSquare, Check } from 'lucide-react';
+import { Sparkles, RefreshCw, Settings, Minus, X, Inbox, MessageSquare, Check } from 'lucide-react';
 
 interface AssistantHeaderProps {
   activeTab: 'briefing' | 'chat';
@@ -8,6 +8,7 @@ interface AssistantHeaderProps {
   isRefreshing: boolean;
   onOpenSettings: () => void;
   onClose: () => void;
+  onMinimize?: () => void;
   dueTodayCount: number;
   lastSyncTimestamp?: number;
 }
@@ -19,6 +20,7 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   isRefreshing,
   onOpenSettings,
   onClose,
+  onMinimize,
   dueTodayCount,
   lastSyncTimestamp
 }) => {
@@ -33,18 +35,18 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   };
 
   return (
-    <div className="flex flex-col border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 select-none">
+    <div className="flex flex-col border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm select-none rounded-t-2xl">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-3">
+      <div className="flex items-center justify-between px-3.5 py-2.5">
         <div className="flex items-center space-x-2">
-          <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-            <Sparkles className="w-4 h-4" />
+          <div className="flex items-center justify-center w-6 h-6 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+            <Sparkles className="w-3.5 h-3.5" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+            <h2 className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
               Gmail AI Assistant
               {dueTodayCount > 0 && (
-                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-full">
+                <span className="px-1.5 py-0.5 text-[9px] font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-full">
                   {dueTodayCount} due today
                 </span>
               )}
@@ -61,32 +63,39 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
             onClick={onRefresh}
             disabled={isRefreshing}
             title="Sync mailbox"
-            className="p-1.5 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+            className="p-1 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
           >
-            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-emerald-600' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-emerald-600' : ''}`} />
           </button>
           <button
             onClick={onOpenSettings}
             title="Settings & AI Model"
-            className="p-1.5 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+            className="p-1 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
           >
-            <Settings className="w-4 h-4" />
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onMinimize || onClose}
+            title="Minimize assistant"
+            className="p-1 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+          >
+            <Minus className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={onClose}
-            title="Close panel"
-            className="p-1.5 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+            title="Close"
+            className="p-1 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
       {/* Navigation tabs */}
-      <div className="flex px-4 space-x-4 border-t border-slate-100 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-900/50">
+      <div className="flex px-3.5 space-x-4 border-t border-slate-100 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-900/50">
         <button
           onClick={() => onTabChange('briefing')}
-          className={`flex items-center space-x-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+          className={`flex items-center space-x-1.5 py-2 text-xs font-medium border-b-2 transition-colors ${
             activeTab === 'briefing'
               ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400'
               : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
@@ -97,7 +106,7 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
         </button>
         <button
           onClick={() => onTabChange('chat')}
-          className={`flex items-center space-x-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+          className={`flex items-center space-x-1.5 py-2 text-xs font-medium border-b-2 transition-colors ${
             activeTab === 'chat'
               ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400'
               : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'

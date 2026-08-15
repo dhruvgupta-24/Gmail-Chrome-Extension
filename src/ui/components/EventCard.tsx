@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ExtractedEvent } from '../../types/events';
-import { formatHumanDate, getGmailLink } from '../../shared/utils';
+import { formatHumanDate, openGmailMessageInCurrentTab } from '../../shared/utils';
 import {
   ExternalLink,
   Mail,
@@ -69,8 +69,22 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
     }
   };
 
+  // Filter out irrelevant social media links from action links
+  const actionableLinks = event.links.filter(l => {
+    const u = l.url.toLowerCase();
+    const lbl = l.label.toLowerCase();
+    return !['instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'youtube.com', 'linkedin.com/company'].some(s => u.includes(s)) &&
+           !['instagram', 'facebook', 'twitter', 'youtube', 'linkedin'].includes(lbl);
+  });
+
   const primarySource = event.sourceMessages[0];
-  const emailUrl = primarySource ? getGmailLink(primarySource.messageId, primarySource.threadId) : '#';
+
+  const handleOpenEmail = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (primarySource) {
+      openGmailMessageInCurrentTab(primarySource.messageId, primarySource.threadId);
+    }
+  };
 
   return (
     <div className="group rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-850 p-3.5 shadow-sm hover:shadow-md hover:border-slate-300 dark:hover:border-slate-700 transition-all">
@@ -122,7 +136,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
       {/* Action Buttons */}
       <div className="mt-3 flex items-center justify-between gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800">
         <div className="flex items-center gap-1.5 flex-wrap">
-          {event.links.slice(0, 2).map((link, idx) => (
+          {actionableLinks.slice(0, 2).map((link, idx) => (
             <a
               key={idx}
               href={link.url}
@@ -136,15 +150,14 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
           ))}
 
           {primarySource && (
-            <a
-              href={emailUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-md transition-colors"
+            <button
+              onClick={handleOpenEmail}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-md transition-colors cursor-pointer"
+              title="Open exact email in current Gmail view"
             >
               <Mail className="w-3 h-3" />
               <span>Open Email</span>
-            </a>
+            </button>
           )}
         </div>
 

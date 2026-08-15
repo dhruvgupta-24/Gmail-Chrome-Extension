@@ -1,7 +1,6 @@
 import React from 'react';
 import { ChatMessage as ChatMessageType } from '../../types/ai';
-import { EventCard } from './EventCard';
-import { getGmailLink } from '../../shared/utils';
+import { openGmailMessageInCurrentTab } from '../../shared/utils';
 import { Bot, User, AlertCircle, Mail, ExternalLink } from 'lucide-react';
 
 interface ChatMessageProps {
@@ -12,7 +11,7 @@ interface ChatMessageProps {
 export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollowUp }) => {
   const isUser = message.role === 'user';
 
-  // Basic formatted markdown renderer for bullet points, bold text, links
+  // Formatted markdown renderer for bullet points, bold text, links, headings
   const renderFormattedContent = (content: string) => {
     const lines = content.split('\n');
     return (
@@ -20,17 +19,28 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
         {lines.map((line, idx) => {
           if (!line.trim()) return <div key={idx} className="h-1" />;
 
-          // Heading
+          // Heading 4
+          if (line.startsWith('#### ')) {
+            return (
+              <h5 key={idx} className="font-semibold text-xs text-slate-800 dark:text-slate-200 mt-2">
+                {line.substring(5)}
+              </h5>
+            );
+          }
+
+          // Heading 3
           if (line.startsWith('### ')) {
             return (
-              <h4 key={idx} className="font-bold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300 mt-2">
+              <h4 key={idx} className="font-bold text-xs uppercase tracking-wider text-emerald-700 dark:text-emerald-400 mt-3 pt-1 border-t border-slate-100 dark:border-slate-800/60">
                 {line.substring(4)}
               </h4>
             );
           }
+
+          // Heading 2 / 1
           if (line.startsWith('## ') || line.startsWith('# ')) {
             return (
-              <h3 key={idx} className="font-semibold text-sm text-slate-900 dark:text-slate-100 mt-2">
+              <h3 key={idx} className="font-semibold text-sm text-slate-900 dark:text-slate-100 mt-2.5">
                 {line.replace(/^#+\s*/, '')}
               </h3>
             );
@@ -40,9 +50,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
           if (line.trim().startsWith('•') || line.trim().startsWith('-') || line.trim().startsWith('*')) {
             const clean = line.trim().replace(/^[\•\-\*]\s*/, '');
             return (
-              <div key={idx} className="flex items-start gap-2 pl-1">
-                <span className="text-emerald-500 font-bold">•</span>
-                <span>{renderInlineMarkdown(clean)}</span>
+              <div key={idx} className="flex items-start gap-2 pl-1 my-0.5">
+                <span className="text-emerald-500 font-bold leading-none mt-1">•</span>
+                <span className="flex-1">{renderInlineMarkdown(clean)}</span>
               </div>
             );
           }
@@ -54,18 +64,53 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
   };
 
   const renderInlineMarkdown = (text: string) => {
-    // Bold: **text**
-    const parts = text.split(/(\*\*.*?\*\*)/g);
+    // Links: [label](url)
+    const linkRegex = /\[(.*?)\]\((.*?)\)/g;
+    const parts = [];
+    let lastIdx = 0;
+    let match;
+
+    while ((match = linkRegex.exec(text)) !== null) {
+      if (match.index > lastIdx) {
+        parts.push(text.substring(lastIdx, match.index));
+      }
+      const label = match[1];
+      const url = match[2];
+      parts.push(
+        <a
+          key={`link-${match.index}`}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-emerald-600 dark:text-emerald-400 hover:underline font-medium inline-flex items-center gap-0.5"
+        >
+          <span>{label}</span>
+          <ExternalLink className="w-2.5 h-2.5 inline opacity-70" />
+        </a>
+      );
+      lastIdx = linkRegex.lastIndex;
+    }
+    if (lastIdx < text.length) {
+      parts.push(text.substring(lastIdx));
+    }
+
+    // Process bold (**text**) within string parts
     return parts.map((part, i) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={i} className="font-semibold text-slate-900 dark:text-white">{part.slice(2, -2)}</strong>;
+      if (typeof part === 'string') {
+        const subParts = part.split(/(\*\*.*?\*\*)/g);
+        return subParts.map((sub, j) => {
+          if (sub.startsWith('**') && sub.endsWith('**')) {
+            return <strong key={`${i}-${j}`} className="font-semibold text-slate-900 dark:text-white">{sub.slice(2, -2)}</strong>;
+          }
+          return sub;
+        });
       }
       return part;
     });
   };
 
   return (
-    <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'} items-start`}>
+    <div className={`flex gap-2.5 ${isUser ? 'flex-row-reverse' : 'flex-row'} items-start`}>
       {/* Avatar */}
       <div
         className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-xs font-semibold ${
@@ -78,7 +123,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
       </div>
 
       {/* Message Body */}
-      <div className={`max-w-[85%] space-y-2.5 ${isUser ? 'items-end' : 'items-start'}`}>
+      <div className={`max-w-[88%] space-y-2 ${isUser ? 'items-end' : 'items-start'}`}>
         <div
           className={`px-3.5 py-2.5 rounded-2xl ${
             isUser
@@ -102,32 +147,20 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onSelectFollo
           )}
         </div>
 
-        {/* Render Extracted Events if provided in response */}
-        {message.events && message.events.length > 0 && (
-          <div className="space-y-2 mt-2">
-            {message.events.map(event => (
-              <EventCard key={event.id} event={event} />
-            ))}
-          </div>
-        )}
-
-        {/* Source Emails Attribution */}
+        {/* Source Emails Attribution with same-tab navigation */}
         {message.sourceMessages && message.sourceMessages.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+          <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
             <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Sources:</span>
             {message.sourceMessages.map((src, idx) => (
-              <a
+              <button
                 key={idx}
-                href={getGmailLink(src.messageId, src.threadId)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-700 transition-colors truncate max-w-[200px]"
+                onClick={() => openGmailMessageInCurrentTab(src.messageId, src.threadId)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-700 transition-colors truncate max-w-[220px] text-left cursor-pointer"
                 title={`Subject: ${src.subject}\nFrom: ${src.sender || 'Unknown'}`}
               >
                 <Mail className="w-3 h-3 text-slate-400 shrink-0" />
                 <span className="truncate">{src.subject || 'Email'}</span>
-                <ExternalLink className="w-2.5 h-2.5 opacity-60 shrink-0" />
-              </a>
+              </button>
             ))}
           </div>
         )}

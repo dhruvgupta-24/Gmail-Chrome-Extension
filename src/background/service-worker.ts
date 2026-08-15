@@ -127,7 +127,8 @@ async function handleMessage(req: ExtensionRequest): Promise<any> {
       } catch (aiErr: any) {
         console.warn('[AI Provider Warning, falling back to local responder]:', aiErr.message);
         // Instant local deterministic fallback so user always gets grounded results
-        finalContent = generateLocalDeterministicResponse(req.query, relevantEvents, now, localResult.dateRange);
+        const allIndexedEvents = await getAllEvents(now);
+        finalContent = generateLocalDeterministicResponse(req.query, relevantEvents, now, localResult.dateRange, allIndexedEvents);
       }
 
       // Step 4: Extract source references for 100% traceability
@@ -149,7 +150,6 @@ async function handleMessage(req: ExtensionRequest): Promise<any> {
 
       return {
         content: finalContent,
-        events: relevantEvents.length > 0 ? relevantEvents.slice(0, 6) : undefined,
         sourceMessages: Array.from(sourceMap.values()).slice(0, 5),
         usedAI
       };

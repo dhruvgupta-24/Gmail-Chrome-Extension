@@ -134,14 +134,13 @@ export const App: React.FC = () => {
         role: 'assistant',
         content: res.content,
         timestamp: Date.now(),
-        events: res.events,
         sourceMessages: res.sourceMessages,
         suggestedFollowUps: generateSuggestedFollowUps(queryText, res.content)
       };
 
       setMessages([...newHistory, assistantMsg]);
 
-      // If new events were found, refresh briefing state
+      // Refresh briefing state in background
       sendMessage<BriefingData>({ type: 'EVENTS_GET_BRIEFING' })
         .then(b => b && setBriefing(b))
         .catch(() => {});
@@ -162,31 +161,31 @@ export const App: React.FC = () => {
   const generateSuggestedFollowUps = (userQ: string, _answer: string): string[] => {
     const lower = userQ.toLowerCase();
     if (lower.includes('test') || lower.includes('assessment') || lower.includes('exam')) {
-      return ['Give me the direct link for the test', 'What is due tomorrow?'];
+      return ['What is due tomorrow?', 'Show registration deadlines'];
     }
     if (lower.includes('today') || lower.includes('due')) {
-      return ['What do I have due tomorrow?', 'Show upcoming tests'];
+      return ['What do I have due tomorrow?', 'Find all upcoming tests'];
     }
     if (lower.includes('placement') || lower.includes('internship')) {
-      return ['Find interview links', 'What tests are scheduled this week?'];
+      return ['What tests are scheduled this week?', 'Show interview schedule'];
     }
-    return ['What do I have due today?', 'Upcoming Tests'];
+    return ['What do I have today and tomorrow?', 'Upcoming Tests'];
   };
 
   const dueTodayCount = briefing?.today.length || 0;
 
   return (
     <div className={isDarkMode ? 'dark' : ''}>
-      {/* Floating Button inside Gmail */}
+      {/* Minimized Floating Button in Bottom-Right */}
       <FloatingTrigger
         isOpen={isOpen}
         onClick={() => setIsOpen(true)}
         dueTodayCount={dueTodayCount}
       />
 
-      {/* Main Slide-Over Panel */}
+      {/* Floating Assistant Card / Popup */}
       {isOpen && (
-        <div className="fixed top-0 right-0 h-screen w-full sm:w-[420px] bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl z-50 flex flex-col animate-slide-in select-text">
+        <div className="fixed bottom-6 right-6 z-[999999] w-[calc(100vw-32px)] sm:w-[410px] h-[min(620px,calc(100vh-48px))] bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xl shadow-slate-900/25 dark:shadow-black/70 flex flex-col overflow-hidden animate-popup-in select-text">
           <AssistantHeader
             activeTab={activeTab}
             onTabChange={setActiveTab}
@@ -194,11 +193,12 @@ export const App: React.FC = () => {
             isRefreshing={isRefreshing}
             onOpenSettings={() => setIsSettingsOpen(true)}
             onClose={() => setIsOpen(false)}
+            onMinimize={() => setIsOpen(false)}
             dueTodayCount={dueTodayCount}
             lastSyncTimestamp={settings.lastSyncTimestamp}
           />
 
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/30 dark:bg-slate-950/20">
             {activeTab === 'briefing' ? (
               <BriefingView
                 briefing={briefing}
@@ -245,7 +245,6 @@ export const App: React.FC = () => {
                   setOauthStatus(status);
                   const freshSettings = await sendMessage<ExtendedSettings>({ type: 'SETTINGS_GET' });
                   if (freshSettings) setSettings(freshSettings);
-                  // Trigger initial sync
                   await handleRefresh();
                 }
               } catch (err: any) {
