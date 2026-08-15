@@ -21,10 +21,21 @@ ${userContextPrompt}
 
 STRICT OPERATIONAL GUIDELINES:
 1. Grounding & Anti-Hallucination: Answer ONLY using the provided emails and extracted events. If a date, time, link, or instruction is not present in the retrieved emails, state clearly that it is not specified. NEVER invent or assume deadlines, test links, or email senders.
-2. Prioritize Actionable Information: Highlight things due today, due tomorrow, upcoming exams/assessments, interviews, submissions, and registrations.
-3. Chronological Clarity: Group or sort events by Today, Tomorrow, and Upcoming. Always mention explicit dates and times when available.
-4. Action Links & Traceability: When discussing tests or forms, reference the specific action link or mention that it is available in the email.
-5. Follow-Up Resolution: If the user refers to previous items (e.g. "the first test", "that registration link"), use the conversation history to resolve the reference accurately.
+2. Date-Range Queries: When the user asks for a date range (e.g. "from 15th August to 20th August"):
+   - Filter and include ONLY events whose actual event dates / assessment windows overlap the requested range.
+   - The email received/sent date must NEVER be treated as the event date.
+   - Format the response with a clean schedule header, e.g.:
+     # Your schedule: Aug 15–20, 2026
+     ## Aug 15
+     - **Event Title** (Company)
+       - Details, time, actions, links
+     ## Aug 15–19
+     - **Cognizant Assessment**
+       - Window: Aug 15–19
+   - If no events are scheduled in that range, explicitly state that no events were found for that period.
+3. No Raw Meta Dump: Never start your response with "Found X relevant items" or robotic retrieval summaries. Jump straight into the organized answer.
+4. Thread Deduplication: Do not show repeated "Re:" or multiple copies of the same thread/event. Provide one consolidated summary per unique event.
+5. Action Links & Traceability: When discussing tests or forms, reference the specific action link or mention that it is available in the email.
 6. Tone: Calm, concise, professional, clear. Avoid unnecessary fluff or robotic boilerplate. Use clean Markdown formatting.`;
 }
 
@@ -38,39 +49,43 @@ export function buildUserPromptWithContext(
   if (extractedEvents && extractedEvents.length > 0) {
     contextBlock += '--- STRUCTURED EVENTS EXTRACTED FROM EMAILS ---\n';
     extractedEvents.slice(0, 10).forEach((ev, idx) => {
+      const dateRangeStr = ev.startDate && ev.endDate && ev.startDate !== ev.endDate
+        ? `${ev.startDate} to ${ev.endDate}`
+        : ev.startDate || ev.date || 'Unspecified';
+
       contextBlock += `[Event #${idx + 1}]
 Title: ${ev.title}
+Company/Organization: ${ev.company || ev.organization || 'N/A'}
 Type: ${ev.type}
-Date: ${ev.date || 'Unspecified'} | Time: ${ev.time || 'Unspecified'} | Status: ${ev.status}
-Organization: ${ev.organization || 'N/A'}
+Event Date / Window: ${dateRangeStr} | Time: ${ev.time || 'Unspecified'} | Status: ${ev.status}
 Action Required: ${ev.actionRequired ? 'YES (' + (ev.actionDescription || 'See email') + ')' : 'NO'}
 Links: ${ev.links.map(l => `${l.label}: ${l.url}`).join(', ') || 'None'}
-Source Email: ${ev.sourceMessages.map(s => `"${s.subject}" from ${s.sender || 'Unknown'}`).join('; ')}
+Source Emails: ${ev.sourceMessages.map(s => `"${s.subject}" (Sent: ${s.receivedAt})`).join('; ')}
 \n`;
     });
   }
 
   if (emails && emails.length > 0) {
     contextBlock += '--- RELEVANT RETRIEVED EMAILS ---\n';
-    emails.slice(0, 8).forEach((em, idx) => {
+    emails.slice(0, 6).forEach((em, idx) => {
       contextBlock += `[Email #${idx + 1}]
 Subject: ${em.subject}
 From: ${em.sender}
 Date Sent: ${em.date}
-Snippet / Excerpt: ${em.snippet}
-Content Excerpt: ${em.plainText.substring(0, 1200)}
-Extracted Links: ${em.links.map(l => `${l.text} -> ${l.href}`).join('; ') || 'None'}
+Snippet: ${em.snippet}
+Content: ${em.plainText.substring(0, 1000)}
+Links: ${em.links.map(l => `${l.text} -> ${l.href}`).join('; ') || 'None'}
 \n`;
     });
   }
 
   if (!contextBlock) {
-    contextBlock = 'No relevant emails found for this query in the searched window.\n';
+    contextBlock = 'No matching events or emails found in local index for this query.\n';
   }
 
   return `${contextBlock}
 --- USER QUESTION ---
 ${userQuery}
 
-Provide a concise, grounded, and actionable response based on the above information.`;
+Provide a concise, grounded, and actionable response based on the above information following the formatting rules.`;
 }

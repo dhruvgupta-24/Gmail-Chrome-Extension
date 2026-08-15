@@ -233,17 +233,23 @@ export const App: React.FC = () => {
               return await sendMessage<ProviderHealthStatus>({ type: 'AI_CHECK_HEALTH' });
             }}
             onLoginOAuth={async (clientId?: string) => {
-              const res = await sendMessage<{ success: boolean; token?: string; error?: string }>({
-                type: 'AUTH_START_LOGIN',
-                customClientId: clientId
-              });
-              if (!res.success) {
-                alert(res.error || 'Login failed.');
-              } else {
-                const status = await sendMessage<OAuthStatus>({ type: 'AUTH_GET_STATUS' });
-                setOauthStatus(status);
-                // Trigger briefing sync after successful login
-                handleRefresh();
+              try {
+                const res = await sendMessage<{ success: boolean; token?: string; error?: string }>({
+                  type: 'AUTH_START_LOGIN',
+                  customClientId: clientId
+                });
+                if (!res.success) {
+                  alert(res.error || 'Login failed. Please check your Google Cloud Web Application Client ID.');
+                } else {
+                  const status = await sendMessage<OAuthStatus>({ type: 'AUTH_GET_STATUS' });
+                  setOauthStatus(status);
+                  const freshSettings = await sendMessage<ExtendedSettings>({ type: 'SETTINGS_GET' });
+                  if (freshSettings) setSettings(freshSettings);
+                  // Trigger initial sync
+                  await handleRefresh();
+                }
+              } catch (err: any) {
+                alert(`Sign in error: ${err.message || err}`);
               }
             }}
             onLogoutOAuth={async () => {

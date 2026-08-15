@@ -1,13 +1,20 @@
 import { OAuthStatus } from '../../types/messages';
 import { getSettings, saveSettings } from '../../storage/settings-store';
 
-const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email';
+const GMAIL_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'email',
+  'profile'
+].join(' ');
+
 const TOKEN_STORAGE_KEY = 'gmail_oauth_token_data';
 
-interface StoredTokenData {
+export interface StoredTokenData {
   accessToken: string;
   expiresAt: number; // epoch ms
   userEmail?: string;
+  savedAt: number;
 }
 
 export class OAuthManager {
@@ -23,14 +30,14 @@ export class OAuthManager {
   }
 
   /**
-   * Gets the redirect URL for chrome.identity.launchWebAuthFlow.
+   * Gets the canonical redirect URL for chrome.identity.launchWebAuthFlow.
    * e.g. https://<extension-id>.chromiumapp.org/
    */
   getRedirectUri(): string {
     if (typeof chrome !== 'undefined' && chrome.identity && chrome.identity.getRedirectURL) {
       return chrome.identity.getRedirectURL();
     }
-    return 'https://localhost/oauth2callback';
+    return 'https://kgiefmfefelicbibbnagkanocmhgnjgo.chromiumapp.org/';
   }
 
   /**
@@ -39,6 +46,7 @@ export class OAuthManager {
   async getValidToken(): Promise<string | null> {
     return new Promise(resolve => {
       if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
+        console.warn('[OAuth] chrome.storage.local is not available');
         resolve(null);
         return;
       }
@@ -50,8 +58,10 @@ export class OAuthManager {
           return;
         }
 
-        // Check expiration (with 2 minute grace period)
-        if (Date.now() >= data.expiresAt - 120000) {
+        // Check token expiration (with 60-second grace window)
+        const now = Date.now();
+        if (typeof data.expiresAt === 'number' && data.expiresAt > 0 && now >= data.expiresAt - 60000) {
+          console.warn('[OAuth] Stored access token has expired (now:', new Date(now).toISOString(), 'expiresAt:', new Date(data.expiresAt).toISOString(), ')');
           resolve(null);
           return;
         }
@@ -72,11 +82,12 @@ export class OAuthManager {
       return {
         isAuthenticated: false,
         clientId: settings.googleClientId,
-        errorMessage: settings.googleClientId ? 'Authentication required. Please sign in.' : 'Google Client ID not configured.'
+        errorMessage: settings.googleClientId
+          ? 'Authentication required. Please sign in.'
+          : 'Google Client ID not configured.'
       };
     }
 
-    // Try reading cached email from storage
     return new Promise(resolve => {
       chrome.storage.local.get([TOKEN_STORAGE_KEY], async result => {
         const data: StoredTokenData = result[TOKEN_STORAGE_KEY];
@@ -84,6 +95,10 @@ export class OAuthManager {
 
         if (!userEmail) {
           userEmail = await this.fetchUserEmail(token);
+          if (userEmail && data) {
+            data.userEmail = userEmail;
+            chrome.storage.local.set({ [TOKEN_STORAGE_KEY]: data });
+          }
         }
 
         resolve({
@@ -96,28 +111,46 @@ export class OAuthManager {
   }
 
   /**
-   * Fetches the user email using Google OAuth UserInfo endpoint.
+   * Fetches the user email using Gmail API profile endpoint (primary)
+   * or Google OAuth UserInfo endpoint (fallback).
    */
   private async fetchUserEmail(token: string): Promise<string | undefined> {
+    // 1. Primary: Gmail API Profile endpoint (shares same gmail.readonly scope)
+    try {
+      const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json'
+        }
+      });
+      if (res.ok) {
+        const profile = await res.json();
+        if (profile.emailAddress) {
+          return profile.emailAddress;
+        }
+      }
+    } catch (err) {
+      console.warn('[OAuth] Gmail profile fetch error:', err);
+    }
+
+    // 2. Fallback: Google UserInfo endpoint
     try {
       const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json'
+        }
       });
       if (res.ok) {
         const info = await res.json();
         if (info.email) {
-          // Update stored token with email
-          chrome.storage.local.get([TOKEN_STORAGE_KEY], result => {
-            const data = result[TOKEN_STORAGE_KEY] || {};
-            data.userEmail = info.email;
-            chrome.storage.local.set({ [TOKEN_STORAGE_KEY]: data });
-          });
           return info.email;
         }
       }
-    } catch {
-      // Non-blocking
+    } catch (err) {
+      console.warn('[OAuth] UserInfo fetch error:', err);
     }
+
     return undefined;
   }
 
@@ -128,34 +161,42 @@ export class OAuthManager {
     const settings = await getSettings();
     const clientId = customClientId || settings.googleClientId;
 
-    if (!clientId) {
-      return {
-        success: false,
-        error: 'Google Cloud Client ID is missing. Please configure it in extension Settings.'
-      };
+    if (!clientId || !clientId.trim()) {
+      const errMsg = 'Google Cloud Client ID is missing. Please enter your Web Application Client ID in extension Settings.';
+      console.error('[OAuth Error]', errMsg);
+      return { success: false, error: errMsg };
     }
 
-    // Save clientId if provided
+    const trimmedClientId = clientId.trim();
     if (customClientId && customClientId !== settings.googleClientId) {
-      await saveSettings({ googleClientId: customClientId });
+      await saveSettings({ googleClientId: trimmedClientId });
     }
 
     const redirectUri = this.getRedirectUri();
+    const maskedClientId = trimmedClientId.length > 16
+      ? `${trimmedClientId.substring(0, 8)}...${trimmedClientId.substring(trimmedClientId.length - 8)}`
+      : trimmedClientId;
+
+    console.log('[OAuth] Starting sign-in flow with Client ID:', maskedClientId);
+    console.log('[OAuth] Redirect URI:', redirectUri);
+
     const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-    authUrl.searchParams.set('client_id', clientId.trim());
+    authUrl.searchParams.set('client_id', trimmedClientId);
     authUrl.searchParams.set('response_type', 'token');
     authUrl.searchParams.set('redirect_uri', redirectUri);
-    authUrl.searchParams.set('scope', GMAIL_READONLY_SCOPE);
+    authUrl.searchParams.set('scope', GMAIL_SCOPES);
     authUrl.searchParams.set('prompt', 'consent');
+    authUrl.searchParams.set('include_granted_scopes', 'true');
 
     return new Promise(resolve => {
       if (typeof chrome === 'undefined' || !chrome.identity || !chrome.identity.launchWebAuthFlow) {
-        resolve({
-          success: false,
-          error: 'chrome.identity API is not available in this environment.'
-        });
+        const err = 'chrome.identity.launchWebAuthFlow API is not available.';
+        console.error('[OAuth Error]', err);
+        resolve({ success: false, error: err });
         return;
       }
+
+      console.log('[OAuth] Launching WebAuthFlow interactive dialog...');
 
       chrome.identity.launchWebAuthFlow(
         {
@@ -164,43 +205,78 @@ export class OAuthManager {
         },
         async redirectResponseUrl => {
           if (chrome.runtime.lastError || !redirectResponseUrl) {
-            resolve({
-              success: false,
-              error: chrome.runtime.lastError?.message || 'Authentication flow was cancelled or failed.'
-            });
+            const errorMsg = chrome.runtime.lastError?.message || 'Authentication window was closed or cancelled.';
+            console.warn('[OAuth] Flow cancelled or failed:', errorMsg);
+            resolve({ success: false, error: errorMsg });
             return;
           }
 
-          try {
-            // Extract access token from response URL fragment (e.g. #access_token=...&expires_in=3600)
-            const hash = new URL(redirectResponseUrl).hash.substring(1);
-            const params = new URLSearchParams(hash);
-            const accessToken = params.get('access_token');
-            const expiresIn = parseInt(params.get('expires_in') || '3600', 10);
+          console.log('[OAuth] Redirect response received from Google');
 
-            if (!accessToken) {
-              const errorParam = params.get('error') || 'No access token received';
-              resolve({ success: false, error: `OAuth error: ${errorParam}` });
+          try {
+            const urlObj = new URL(redirectResponseUrl);
+
+            // Parse parameters from both hash fragment (#access_token=...) and query string (?error=...)
+            const hashString = urlObj.hash.startsWith('#') ? urlObj.hash.substring(1) : urlObj.hash;
+            const hashParams = new URLSearchParams(hashString);
+            const searchParams = new URLSearchParams(urlObj.search);
+
+            const accessToken = hashParams.get('access_token') || searchParams.get('access_token');
+            const expiresInStr = hashParams.get('expires_in') || searchParams.get('expires_in');
+            const errorParam = hashParams.get('error') || searchParams.get('error');
+            const errorDesc = hashParams.get('error_description') || searchParams.get('error_description');
+
+            if (errorParam) {
+              const fullError = errorDesc ? `${errorParam}: ${errorDesc}` : errorParam;
+              console.error('[OAuth Error] Google returned authorization error:', fullError);
+              resolve({ success: false, error: `Google OAuth error: ${fullError}` });
               return;
             }
 
-            const expiresAt = Date.now() + expiresIn * 1000;
+            if (!accessToken) {
+              console.error('[OAuth Error] No access_token found in response URL:', redirectResponseUrl.split('#')[0]);
+              resolve({
+                success: false,
+                error: 'No access token received in Google response. Ensure your OAuth client type is Web Application.'
+              });
+              return;
+            }
+
+            const expiresIn = parseInt(expiresInStr || '3600', 10);
+            const safeExpiresIn = Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 3600;
+            const expiresAt = Date.now() + safeExpiresIn * 1000;
+
+            console.log(`[OAuth] Access token successfully extracted (valid for ${safeExpiresIn}s)`);
+
+            // Fetch user profile email
+            console.log('[OAuth] Fetching account email...');
             const userEmail = await this.fetchUserEmail(accessToken);
+            if (userEmail) {
+              console.log('[OAuth] Authenticated user email:', userEmail);
+            }
 
             const tokenData: StoredTokenData = {
               accessToken,
               expiresAt,
-              userEmail
+              userEmail,
+              savedAt: Date.now()
             };
 
+            // Store token persistently in chrome.storage.local
             chrome.storage.local.set({ [TOKEN_STORAGE_KEY]: tokenData }, () => {
+              if (chrome.runtime.lastError) {
+                console.error('[OAuth Error] Failed to persist token:', chrome.runtime.lastError.message);
+                resolve({ success: false, error: chrome.runtime.lastError.message });
+                return;
+              }
+
+              console.log('[OAuth] Token data stored successfully. Authentication state: AUTHENTICATED');
               resolve({ success: true, token: accessToken });
             });
           } catch (err: any) {
-            resolve({
-              success: false,
-              error: `Failed to parse OAuth response: ${err.message || err}`
-            });
+            const parseErr = `Failed to process Google OAuth response: ${err.message || err}`;
+            console.error('[OAuth Error]', parseErr);
+            resolve({ success: false, error: parseErr });
           }
         }
       );
@@ -211,8 +287,10 @@ export class OAuthManager {
    * Clears saved token on logout.
    */
   async logout(): Promise<void> {
+    console.log('[OAuth] Logging out and clearing stored token');
     return new Promise(resolve => {
       chrome.storage.local.remove([TOKEN_STORAGE_KEY], () => {
+        console.log('[OAuth] Token cleared. Authentication state: UNAUTHENTICATED');
         resolve();
       });
     });

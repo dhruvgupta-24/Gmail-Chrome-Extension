@@ -21,8 +21,11 @@ export class GmailClient {
   private async authenticatedFetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
     const token = await OAuthManager.getInstance().getValidToken();
     if (!token) {
+      console.warn('[Gmail Client] Token retrieval failed: User is unauthenticated or token is expired.');
       throw new Error('Gmail authorization required. Please sign in with Google in extension settings.');
     }
+
+    console.log(`[Gmail Client] Token retrieved for sync (valid: true). Requesting: ${endpoint.split('?')[0]}`);
 
     const headers = new Headers(options.headers || {});
     headers.set('Authorization', `Bearer ${token}`);
@@ -34,9 +37,9 @@ export class GmailClient {
     });
 
     if (res.status === 401) {
-      // Token expired or invalid
+      console.warn('[Gmail Client] 401 Unauthorized from Google API. Clearing invalid token...');
       await OAuthManager.getInstance().logout();
-      throw new Error('Authentication expired. Please sign in again.');
+      throw new Error('Authentication expired or unauthorized. Please sign in again in extension settings.');
     }
 
     return res;
@@ -46,18 +49,23 @@ export class GmailClient {
    * Searches Gmail for messages matching query string `q`.
    */
   async searchMessages(query: string, maxResults: number = 15): Promise<ParsedEmailMessage[]> {
+    console.log(`[Gmail Client] Searching Gmail messages with maxResults: ${maxResults}`);
     const searchUrl = `/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`;
     const res = await this.authenticatedFetch(searchUrl);
 
     if (!res.ok) {
       const err = await res.text();
+      console.error(`[Gmail Client] Search request failed (${res.status}):`, err);
       throw new Error(`Gmail search error (${res.status}): ${err}`);
     }
 
     const data: GmailListMessagesResponse = await res.json();
     if (!data.messages || data.messages.length === 0) {
+      console.log('[Gmail Client] Search completed: 0 matching messages found.');
       return [];
     }
+
+    console.log(`[Gmail Client] Search returned ${data.messages.length} message IDs. Fetching message details in batches...`);
 
     // Concurrently fetch message details in batches of 5
     const messageIds = data.messages.map(m => m.id);
@@ -76,6 +84,7 @@ export class GmailClient {
       }
     }
 
+    console.log(`[Gmail Client] Successfully parsed ${parsedMessages.length} messages.`);
     return parsedMessages;
   }
 
@@ -85,12 +94,15 @@ export class GmailClient {
   async getMessage(messageId: string): Promise<ParsedEmailMessage | null> {
     try {
       const res = await this.authenticatedFetch(`/messages/${encodeURIComponent(messageId)}?format=full`);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn(`[Gmail Client] Failed to fetch message ${messageId}: HTTP ${res.status}`);
+        return null;
+      }
 
       const raw: GmailMessageResource = await res.json();
       return parseGmailMessage(raw);
     } catch (err) {
-      console.warn(`Failed to fetch message ${messageId}:`, err);
+      console.warn(`[Gmail Client] Failed to fetch message ${messageId}:`, err);
       return null;
     }
   }
@@ -101,14 +113,17 @@ export class GmailClient {
   async getThread(threadId: string): Promise<ParsedEmailMessage[]> {
     try {
       const res = await this.authenticatedFetch(`/threads/${encodeURIComponent(threadId)}?format=full`);
-      if (!res.ok) return [];
+      if (!res.ok) {
+        console.warn(`[Gmail Client] Failed to fetch thread ${threadId}: HTTP ${res.status}`);
+        return [];
+      }
 
       const raw: GmailThreadResource = await res.json();
       if (!raw.messages || raw.messages.length === 0) return [];
 
       return raw.messages.map(parseGmailMessage);
     } catch (err) {
-      console.warn(`Failed to fetch thread ${threadId}:`, err);
+      console.warn(`[Gmail Client] Failed to fetch thread ${threadId}:`, err);
       return [];
     }
   }

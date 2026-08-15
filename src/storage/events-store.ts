@@ -2,6 +2,7 @@ import { getDatabase } from './database';
 import { ExtractedEvent } from '../types/events';
 import { calculateEventStatus } from '../services/extraction/date-parser';
 import { mergeEvents } from '../services/extraction/event-extractor';
+import { deduplicateEvents } from './local-search';
 
 export interface BriefingData {
   today: ExtractedEvent[];
@@ -33,20 +34,23 @@ export async function saveEvents(events: ExtractedEvent[]): Promise<void> {
 }
 
 /**
- * Retrieves all events from IndexedDB, refreshing their dynamic status based on the current local date.
+ * Retrieves all events from IndexedDB, refreshing their dynamic status based on the current local date
+ * and deduplicating thread replies.
  */
 export async function getAllEvents(nowDate: Date = new Date()): Promise<ExtractedEvent[]> {
   const db = await getDatabase();
   const all = await db.getAll('events');
 
   // Refresh status relative to now
-  return all.map(event => {
-    const currentStatus = calculateEventStatus(event.date, nowDate);
+  const refreshed = all.map(event => {
+    const currentStatus = calculateEventStatus(event.startDate || event.date, nowDate, event.endDate);
     return {
       ...event,
       status: currentStatus !== 'unknown' ? currentStatus : event.status
     };
   });
+
+  return deduplicateEvents(refreshed);
 }
 
 /**
@@ -78,14 +82,13 @@ export async function getBriefingEvents(nowDate: Date = new Date()): Promise<Bri
   // 1. Events with date & time first
   // 2. Urgent / Action-required items elevated
   const sortComparator = (a: ExtractedEvent, b: ExtractedEvent) => {
-    // Action required comes first
     if (a.actionRequired && !b.actionRequired) return -1;
     if (!a.actionRequired && b.actionRequired) return 1;
 
-    // Date comparison
-    if (a.date && b.date) {
-      if (a.date !== b.date) return a.date.localeCompare(b.date);
-      // Time comparison if same date
+    const dateA = a.startDate || a.date;
+    const dateB = b.startDate || b.date;
+    if (dateA && dateB) {
+      if (dateA !== dateB) return dateA.localeCompare(dateB);
       if (a.time && b.time) return a.time.localeCompare(b.time);
     }
     return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();

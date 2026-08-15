@@ -3,14 +3,18 @@ export type EventType =
   | "quiz"
   | "exam"
   | "assessment"
+  | "online_test"
+  | "aptitude_test"
   | "interview"
   | "coding_round"
   | "assignment"
   | "submission"
   | "registration"
   | "deadline"
+  | "ppt"
   | "internship"
   | "placement"
+  | "action_required"
   | "other";
 
 export type EventStatus = "today" | "tomorrow" | "upcoming" | "past" | "unknown";
@@ -28,18 +32,22 @@ export interface SourceMessageRef {
   threadId?: string;
   subject: string;
   sender?: string;
-  receivedAt: string; // ISO date string
+  receivedAt: string; // ISO date string or formatted date
   snippet?: string;
 }
 
 export interface ExtractedEvent {
-  id: string;
-  title: string;
+  id: string; // Typically "thread-<threadId>" or "event-<messageId>"
+  threadId?: string;
+  title: string; // Clean title without "Re:", "Fwd:", etc.
+  company?: string; // Company / Organization / Institution
   type: EventType;
-  date?: string; // YYYY-MM-DD
-  time?: string; // HH:mm or HH:mm AM/PM
-  endDate?: string;
-  deadline?: string; // ISO or formatted string
+  startDate?: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD for multi-day window
+  date?: string; // YYYY-MM-DD (primary/start date for backward compatibility)
+  time?: string; // e.g. "11:59 PM", "10:00 AM"
+  deadline?: string; // Normalized string description e.g. "2026-08-16 at 11:59 PM"
+  allDates?: string[]; // All specific event dates extracted from the text
   organization?: string;
   actionRequired: boolean;
   actionDescription?: string;
@@ -49,6 +57,14 @@ export interface ExtractedEvent {
   status: EventStatus;
   createdAt: string; // ISO timestamp
   updatedAt: string; // ISO timestamp
+}
+
+export interface DateRangeQuery {
+  isDateQuery: boolean;
+  startDate?: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD
+  label?: string; // e.g. "Aug 15–20, 2026"
+  isSingleDay?: boolean;
 }
 
 export interface EventFilter {

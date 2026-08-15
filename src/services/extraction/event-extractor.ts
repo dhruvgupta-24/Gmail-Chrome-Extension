@@ -1,7 +1,26 @@
-import { ExtractedEvent, EventType } from '../../types/events';
+import { ExtractedEvent, EventType, ActionLink } from '../../types/events';
 import { ParsedEmailMessage } from '../../types/gmail';
 import { parseDateFromEmailText } from './date-parser';
 import { extractActionLinks } from '../gmail/links';
+
+/**
+ * Strips email reply/forward prefixes, tags, and extraneous whitespace to produce a clean event title.
+ */
+export function cleanEventTitle(subject: string): string {
+  if (!subject) return 'Untitled Event';
+  let prev = '';
+  let clean = subject.trim();
+
+  while (prev !== clean) {
+    prev = clean;
+    clean = clean
+      .replace(/^(\s*(re|fwd|fw|aw|vs|wg)\s*:\s*)+/i, '')
+      .replace(/^\[(external|urgent|action\s+required|important|reminder)\]\s*/i, '')
+      .trim();
+  }
+
+  return clean || subject;
+}
 
 /**
  * Classifies the EventType based on email subject and content keywords.
@@ -9,11 +28,14 @@ import { extractActionLinks } from '../gmail/links';
 export function detectEventType(subject: string, body: string): EventType {
   const combined = `${subject} ${body}`.toLowerCase();
 
-  if (/\b(coding\s+round|oa|online\s+assessment|hackerrank|codeforces|leetcode)\b/i.test(combined)) {
+  if (/\b(coding\s+round|oa\b|online\s+assessment|hackerrank|codeforces|leetcode|mettl|wheebox)\b/i.test(combined)) {
     return 'coding_round';
   }
-  if (/\b(interview|technical\s+round|hr\s+round|interview\s+schedule|discussion)\b/i.test(combined)) {
+  if (/\b(interview|technical\s+round|hr\s+round|interview\s+schedule|discussion\s+round)\b/i.test(combined)) {
     return 'interview';
+  }
+  if (/\b(ppt\b|pre[- ]placement\s+talk|presentation)\b/i.test(combined)) {
+    return 'ppt';
   }
   if (/\b(quiz|pop\s+quiz)\b/i.test(combined)) {
     return 'quiz';
@@ -21,7 +43,7 @@ export function detectEventType(subject: string, body: string): EventType {
   if (/\b(midterm|endterm|final\s+exam|semester\s+exam|exam\s+schedule|examination)\b/i.test(combined)) {
     return 'exam';
   }
-  if (/\b(assessment|test|eval|evaluation)\b/i.test(combined)) {
+  if (/\b(assessment|test|eval|evaluation|online\s+test|aptitude\s+test)\b/i.test(combined)) {
     return 'assessment';
   }
   if (/\b(assignment|problem\s+set|homework|lab\s+work|project\s+submission)\b/i.test(combined)) {
@@ -55,7 +77,7 @@ export function detectActionRequired(subject: string, body: string): { actionReq
   const actionPhrases = [
     { pattern: /register\s+before|deadline\s+to\s+register|registration\s+closing/i, desc: 'Complete registration before the deadline.' },
     { pattern: /submit\s+your\s+assignment|submission\s+due|upload\s+your/i, desc: 'Submit required coursework or project.' },
-    { pattern: /start\s+your\s+test|assessment\s+link\s+active|take\s+the\s+assessment/i, desc: 'Complete the online test/assessment.' },
+    { pattern: /start\s+your\s+test|assessment\s+link\s+active|take\s+the\s+assessment|complete\s+the\s+assessment/i, desc: 'Complete the online test/assessment.' },
     { pattern: /join\s+the\s+interview|interview\s+scheduled|attend\s+the\s+meeting/i, desc: 'Attend scheduled interview or meeting.' },
     { pattern: /action\s+required|mandatory\s+attendance|urgent\s+action/i, desc: 'Immediate action required as per email.' },
     { pattern: /fill\s+the\s+form|fill\s+out\s+this\s+google\s+form/i, desc: 'Fill out the required form.' },
@@ -68,7 +90,6 @@ export function detectActionRequired(subject: string, body: string): { actionReq
     }
   }
 
-  // General check for "due", "deadline", "urgent"
   if (/\b(due\s+today|due\s+tomorrow|urgent|mandatory|action\s+required)\b/i.test(combined)) {
     return { actionRequired: true, actionDescription: 'Action required before specified deadline.' };
   }
@@ -77,18 +98,25 @@ export function detectActionRequired(subject: string, body: string): { actionReq
 }
 
 /**
- * Extracts organization or sender institution.
+ * Extracts organization or company from sender and subject.
  */
-export function extractOrganization(senderName: string, subject: string): string {
-  if (senderName && !senderName.includes('@')) {
-    // If sender is e.g. "Placement Cell IIT", "Bain & Company", "Google Careers"
-    return senderName;
+export function extractOrganization(senderName: string, subject: string, body: string = ''): string {
+  // 1. Check for common company names in subject / sender (e.g. "Sigmoid Analytics", "Cognizant", "Google", "Amazon")
+  const textToScan = `${senderName} ${subject} ${body.substring(0, 300)}`;
+  const companyMatch = textToScan.match(/\b(Sigmoid(?:\s+Analytics)?|Cognizant|Amazon|Google|Microsoft|Bain(?:\s+&\s+Company)?|Goldman\s+Sachs|McKinsey|Flipkart|Uber|Adobe|Salesforce|TCS|Infosys|Wipro|Accenture|Deloitte|PwC|EY|KPMG)\b/i);
+  if (companyMatch) {
+    return companyMatch[1].trim();
   }
-  // Try extracting from subject brackets e.g. "[Placement]", "[Academics]", "[Prof. Smith]"
+
+  if (senderName && !senderName.includes('@')) {
+    return senderName.replace(/^["']|["']$/g, '').trim();
+  }
+
   const bracketMatch = subject.match(/^\[(.*?)\]/);
   if (bracketMatch) {
     return bracketMatch[1].trim();
   }
+
   return senderName || '';
 }
 
@@ -101,20 +129,29 @@ export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Dat
   const type = detectEventType(email.subject, email.plainText);
   const { actionRequired, actionDescription } = detectActionRequired(email.subject, email.plainText);
   const links = extractActionLinks(email.htmlContent || email.plainText);
-  const organization = extractOrganization(email.senderName, email.subject);
+  const organization = extractOrganization(email.senderName, email.subject, email.plainText);
+  const cleanTitle = cleanEventTitle(email.subject);
 
   // If it has neither a detected date nor action required nor academic/career event type, it might not be a high-signal event
   if (type === 'other' && !actionRequired && dateResult.status === 'unknown') {
     return null;
   }
 
+  // Use threadId as primary event ID to consolidate email replies automatically
+  const eventId = email.threadId ? `thread-${email.threadId}` : `event-${email.id}`;
+
   return {
-    id: `event-${email.id}`,
-    title: email.subject,
+    id: eventId,
+    threadId: email.threadId,
+    title: cleanTitle,
+    company: organization || undefined,
     type,
+    startDate: dateResult.startDate,
+    endDate: dateResult.endDate,
     date: dateResult.date,
     time: dateResult.time,
     deadline: dateResult.deadline,
+    allDates: dateResult.allDates,
     organization,
     actionRequired,
     actionDescription,
@@ -129,7 +166,7 @@ export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Dat
         snippet: email.snippet
       }
     ],
-    confidence: 0.9,
+    confidence: 0.95,
     status: dateResult.status,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -146,20 +183,36 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
   [...existing.sourceMessages, ...incoming.sourceMessages].forEach(m => sourceMap.set(m.messageId, m));
 
   // Merge links avoiding duplicate URLs
-  const linkMap = new Map<string, typeof existing.links[0]>();
+  const linkMap = new Map<string, ActionLink>();
   [...existing.links, ...incoming.links].forEach(l => linkMap.set(l.url, l));
 
-  // Determine which event is newer
+  // Merge allDates set
+  const datesSet = new Set<string>();
+  (existing.allDates || []).forEach(d => datesSet.add(d));
+  (incoming.allDates || []).forEach(d => datesSet.add(d));
+  if (existing.startDate) datesSet.add(existing.startDate);
+  if (incoming.startDate) datesSet.add(incoming.startDate);
+  if (existing.endDate) datesSet.add(existing.endDate);
+  if (incoming.endDate) datesSet.add(incoming.endDate);
+  const allDates = Array.from(datesSet).sort();
+
   const isIncomingNewer = new Date(incoming.updatedAt).getTime() >= new Date(existing.updatedAt).getTime();
   const primary = isIncomingNewer ? incoming : existing;
   const secondary = isIncomingNewer ? existing : incoming;
 
+  const startDate = (allDates.length > 0 ? allDates[0] : primary.startDate || secondary.startDate) || undefined;
+  const endDate = (allDates.length > 1 ? allDates[allDates.length - 1] : primary.endDate || secondary.endDate) || undefined;
+
   return {
     ...primary,
-    // Preserve date/time if primary is missing but secondary had it
-    date: primary.date || secondary.date,
+    title: cleanEventTitle(primary.title || secondary.title),
+    company: primary.company || secondary.company || primary.organization || secondary.organization,
+    startDate,
+    endDate,
+    date: startDate,
     time: primary.time || secondary.time,
     deadline: primary.deadline || secondary.deadline,
+    allDates: allDates.length > 0 ? allDates : undefined,
     actionRequired: primary.actionRequired || secondary.actionRequired,
     actionDescription: primary.actionDescription || secondary.actionDescription,
     organization: primary.organization || secondary.organization,

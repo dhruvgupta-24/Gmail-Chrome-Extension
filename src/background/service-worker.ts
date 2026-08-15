@@ -82,8 +82,8 @@ async function handleMessage(req: ExtensionRequest): Promise<any> {
       let contextEmails = localResult.cachedMessages;
       let relevantEvents = localResult.events;
 
-      // Step 2: Fallback to Live Gmail API only if local index has no matches and user asks specific query
-      if (relevantEvents.length === 0 && contextEmails.length === 0) {
+      // Step 2: Fallback to Live Gmail API only if local index has no matches, it's NOT an explicit empty date range, and user is authenticated
+      if (!localResult.isDateQuery && relevantEvents.length === 0 && contextEmails.length === 0) {
         try {
           const auth = await OAuthManager.getInstance().getStatus();
           if (auth.isAuthenticated) {
@@ -127,7 +127,7 @@ async function handleMessage(req: ExtensionRequest): Promise<any> {
       } catch (aiErr: any) {
         console.warn('[AI Provider Warning, falling back to local responder]:', aiErr.message);
         // Instant local deterministic fallback so user always gets grounded results
-        finalContent = generateLocalDeterministicResponse(req.query, relevantEvents);
+        finalContent = generateLocalDeterministicResponse(req.query, relevantEvents, now, localResult.dateRange);
       }
 
       // Step 4: Extract source references for 100% traceability

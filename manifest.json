@@ -10,7 +10,8 @@
   ],
   "host_permissions": [
     "https://mail.google.com/*",
-    "https://www.googleapis.com/*",
+    "https://*.googleapis.com/*",
+    "https://accounts.google.com/*",
     "http://localhost:11434/*",
     "http://127.0.0.1:11434/*"
   ],
