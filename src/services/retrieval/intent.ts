@@ -89,7 +89,7 @@ export function parseQueryConstraints(query: string, nowDate: Date = new Date())
     questionType = 'existence';
   } else if (/^(?:when\s+is|what\s+time|at\s+what\s+time|when\s+does|when\s+will|date\s+of)\b/i.test(lower)) {
     questionType = 'time_query';
-  } else if (/\b(?:what\s+is\s+the\s+link|where\s+is\s+the\s+link|give\s+me\s+link|portal\s+link|test\s+link|meeting\s+link)\b/i.test(lower)) {
+  } else if (/\b(?:where|what|give|share|get)\b.*\b(?:link|url|portal)\b/i.test(lower) || /\b(?:link\s+for|portal\s+link|test\s+link|meeting\s+link)\b/i.test(lower)) {
     questionType = 'link_query';
   } else if (/\b(?:what\s+action|what\s+do\s+i\s+need\s+to\s+do|how\s+to\s+register|how\s+to\s+apply)\b/i.test(lower)) {
     questionType = 'action_query';

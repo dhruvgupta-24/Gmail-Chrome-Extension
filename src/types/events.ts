@@ -43,6 +43,7 @@ export interface ProcessStage {
   time?: string; // e.g. "4:00 PM"
   status?: 'scheduled' | 'tbd' | 'completed' | 'unknown';
   details?: string; // e.g. "Virtual", "Test active from 4:00 PM to 5:30 PM"
+  links?: ActionLink[]; // Links specific to this stage
 }
 
 export interface ExtractedEvent {

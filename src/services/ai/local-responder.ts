@@ -1,4 +1,4 @@
-import { ExtractedEvent, DateRangeQuery } from '../../types/events';
+import { ExtractedEvent, DateRangeQuery, EventType, ActionLink } from '../../types/events';
 import { parseQueryDateRange, toDateString, parseISODate } from '../extraction/date-parser';
 import { deduplicateEvents } from '../../storage/local-search';
 import { QueryConstraints, parseQueryConstraints } from '../retrieval/intent';
@@ -38,38 +38,102 @@ export function formatWeekdayMonthDay(dateStr: string): string {
 }
 
 /**
- * Filters out social media links (Instagram, Facebook, etc.) and returns the best action link.
+ * Checks whether an action link is valid and non-social.
  */
-function getBestActionLink(links: ExtractedEvent['links']): { label: string; url: string } | null {
-  if (!links || links.length === 0) return null;
-  const valid = links.filter(l => {
-    const u = l.url.toLowerCase();
-    const lbl = l.label.toLowerCase();
-    return !['instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'youtube.com', 'linkedin.com/company'].some(s => u.includes(s)) &&
-           !['instagram', 'facebook', 'twitter', 'youtube', 'linkedin', 'unsubscribe', 'website'].includes(lbl);
-  });
-  return valid.length > 0 ? valid[0] : null;
+function isValidActionLink(l: ActionLink): boolean {
+  if (!l || !l.url) return false;
+  const u = l.url.toLowerCase();
+  const lbl = l.label.toLowerCase();
+  return !['instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'youtube.com', 'linkedin.com/company'].some(s => u.includes(s)) &&
+         !['instagram', 'facebook', 'twitter', 'youtube', 'linkedin', 'unsubscribe', 'website'].includes(lbl);
 }
 
 /**
- * Generates a natural, intelligent summary line for an event.
+ * Stage-aware link filter: Ensures meeting/Teams links are NOT displayed on assessment stages,
+ * and assessment links are NOT displayed on meeting/PPT stages.
  */
-function summarizeEventNaturally(ev: ExtractedEvent, context: 'today' | 'tomorrow' | 'upcoming'): string {
+export function getBestActionLinkForStage(
+  stageType: EventType,
+  stageLinks?: ActionLink[],
+  parentLinks?: ActionLink[]
+): { label: string; url: string } | null {
+  // 1. Stage-specific links take absolute priority
+  if (stageLinks && stageLinks.length > 0) {
+    const valid = stageLinks.filter(l => isValidActionLink(l));
+    if (valid.length > 0) return valid[0];
+  }
+
+  // 2. Filter parent links by compatibility with stage type
+  if (!parentLinks || parentLinks.length === 0) return null;
+  const validParent = parentLinks.filter(l => isValidActionLink(l));
+  if (validParent.length === 0) return null;
+
+  // Tests & Assessments: Must prefer assessment/portal links, strictly excluding meeting links (Teams/Zoom/Meet)
+  if (['assessment', 'coding_round', 'test', 'quiz', 'exam'].includes(stageType)) {
+    const testLinks = validParent.filter(l => l.type === 'assessment' || l.type === 'portal');
+    if (testLinks.length > 0) return testLinks[0];
+    const nonMeeting = validParent.filter(l => l.type !== 'meeting');
+    return nonMeeting.length > 0 ? nonMeeting[0] : null;
+  }
+
+  // PPT & Interviews: Must prefer meeting links (Teams/Zoom/Meet)
+  if (['ppt', 'interview'].includes(stageType)) {
+    const meetingLinks = validParent.filter(l => l.type === 'meeting');
+    if (meetingLinks.length > 0) return meetingLinks[0];
+    return validParent[0];
+  }
+
+  // Registration
+  if (stageType === 'registration') {
+    const regLinks = validParent.filter(l => l.type === 'registration');
+    if (regLinks.length > 0) return regLinks[0];
+  }
+
+  return validParent[0];
+}
+
+/**
+ * Generates a natural, intelligent summary line for an event, selecting strictly the stage that matches the requested date.
+ */
+function summarizeEventNaturally(
+  ev: ExtractedEvent,
+  context: 'today' | 'tomorrow' | 'upcoming',
+  targetDateStr?: string
+): string {
   const org = ev.company || ev.organization;
   const orgStr = org ? ` (${org})` : '';
-  const bestLink = getBestActionLink(ev.links);
-  const linkStr = bestLink ? ` [${bestLink.label}](${bestLink.url})` : '';
 
-  // 0. Process Stage Match (e.g. Infoedge Technical Assessment today at 4:00 PM)
+  // 0. Multi-Stage Process Selection (Select strictly the stage matching the queried date!)
   if (ev.stages && ev.stages.length > 0) {
-    const stageToday = ev.stages.find(s => s.type === 'assessment' || s.type === 'coding_round' || s.type === 'test' || s.type === 'ppt' || s.type === 'interview');
-    if (context === 'today' && stageToday) {
-      const stageTime = stageToday.time ? ` at ${stageToday.time}` : (ev.time ? ` at ${ev.time}` : '');
+    const matchingStage = ev.stages.find(s => {
+      if (targetDateStr) {
+        return s.date === targetDateStr;
+      }
+      if (context === 'upcoming') {
+        return s.date && s.date > (targetDateStr || '');
+      }
+      return false;
+    });
+
+    if (matchingStage) {
+      const stageTime = matchingStage.time ? ` at ${matchingStage.time}` : (ev.time ? ` at ${ev.time}` : '');
       const actionDesc = ev.actionDescription ? ` ${ev.actionDescription}` : '';
-      const prefix = ev.company && !stageToday.name.toLowerCase().includes(ev.company.toLowerCase()) ? `${ev.company} ` : '';
-      return `**${prefix}${stageToday.name}**${orgStr} — Scheduled for today${stageTime}.${actionDesc}${linkStr}`;
+      const prefix = ev.company && !matchingStage.name.toLowerCase().includes(ev.company.toLowerCase()) ? `${ev.company} ` : '';
+      const stageLink = getBestActionLinkForStage(matchingStage.type, matchingStage.links, ev.links);
+      const stageLinkStr = stageLink ? ` [${stageLink.label}](${stageLink.url})` : '';
+
+      if (context === 'today') {
+        return `**${prefix}${matchingStage.name}**${orgStr} — Scheduled for today${stageTime}.${actionDesc}${stageLinkStr}`;
+      }
+      if (context === 'tomorrow') {
+        return `**${prefix}${matchingStage.name}**${orgStr} — Scheduled for tomorrow${stageTime}.${actionDesc}${stageLinkStr}`;
+      }
+      return `**${prefix}${matchingStage.name}**${orgStr} — Scheduled for ${formatMonthDay(matchingStage.date)}${stageTime}.${actionDesc}${stageLinkStr}`;
     }
   }
+
+  const bestLink = getBestActionLinkForStage(ev.type, undefined, ev.links);
+  const linkStr = bestLink ? ` [${bestLink.label}](${bestLink.url})` : '';
 
   // 1. Continuous window assessment (e.g. AIMCAT Aug 15–19)
   if (ev.isContinuousRange && ev.startDate && ev.endDate) {
@@ -146,17 +210,57 @@ function formatEntitySpecificResponse(
   }
 
   const primaryEvent = events[0];
-  const bestLink = getBestActionLink(primaryEvent.links);
-  const linkStr = bestLink ? ` [${bestLink.label}](${bestLink.url})` : '';
 
-  // Check if query is targeting a specific process stage (e.g. PPT, Assessment, Interview)
-  const matchedStage = (primaryEvent.stages || []).find(s => {
-    if (constraints.eventType === 'test') return ['assessment', 'coding_round', 'test'].includes(s.type);
-    if (constraints.eventType === 'ppt') return s.type === 'ppt';
-    if (constraints.eventType === 'interview') return s.type === 'interview';
-    if (constraints.eventType === 'deadline') return s.type === 'registration' || s.type === 'deadline';
+  // Check if query is targeting a specific process stage or date
+  const todayStr = toDateString(_nowDate);
+  const targetDateStrConstraint = constraints.dateRange?.startDate;
+
+  // Find the most relevant stage:
+  // 1. Stage matching target date constraint (e.g. today / tomorrow)
+  // 2. Stage matching target event type (e.g. test / ppt / interview)
+  // 3. Today's active stage (s.date === todayStr)
+  // 4. Next upcoming stage (s.date >= todayStr)
+  let matchedStage = (primaryEvent.stages || []).find(s => {
+    if (constraints.eventType && constraints.eventType !== 'any') {
+      const typeMatches =
+        (constraints.eventType === 'test' && ['assessment', 'coding_round', 'test'].includes(s.type)) ||
+        (constraints.eventType === 'ppt' && s.type === 'ppt') ||
+        (constraints.eventType === 'interview' && s.type === 'interview') ||
+        (constraints.eventType === 'deadline' && (s.type === 'registration' || s.type === 'deadline'));
+      if (!typeMatches) return false;
+    }
+    if (targetDateStrConstraint && s.date) {
+      return s.date === targetDateStrConstraint;
+    }
+    if (s.date === todayStr) {
+      return true;
+    }
     return false;
   });
+
+  if (!matchedStage && targetDateStrConstraint) {
+    matchedStage = (primaryEvent.stages || []).find(s => s.date === targetDateStrConstraint);
+  }
+
+  if (!matchedStage && constraints.eventType && constraints.eventType !== 'any') {
+    matchedStage = (primaryEvent.stages || []).find(s => {
+      if (constraints.eventType === 'test') return ['assessment', 'coding_round', 'test'].includes(s.type);
+      if (constraints.eventType === 'ppt') return s.type === 'ppt';
+      if (constraints.eventType === 'interview') return s.type === 'interview';
+      if (constraints.eventType === 'deadline') return s.type === 'registration' || s.type === 'deadline';
+      return false;
+    });
+  }
+
+  if (!matchedStage) {
+    matchedStage = (primaryEvent.stages || []).find(s => s.date === todayStr) ||
+                   (primaryEvent.stages || []).find(s => s.date && s.date >= todayStr) ||
+                   primaryEvent.stages?.[0];
+  }
+
+  const stageType = matchedStage ? matchedStage.type : primaryEvent.type;
+  const bestLink = getBestActionLinkForStage(stageType, matchedStage?.links, primaryEvent.links);
+  const linkStr = bestLink ? ` [${bestLink.label}](${bestLink.url})` : '';
 
   const rawStageTitle = matchedStage?.name || primaryEvent.title;
   const stageTitle = rawStageTitle.toLowerCase().includes(entityDisplay.toLowerCase())
@@ -174,7 +278,7 @@ function formatEntitySpecificResponse(
 
   // Multi-date discrete string
   let multiDateStr = '';
-  if (primaryEvent.allDates && primaryEvent.allDates.length > 1) {
+  if (primaryEvent.allDates && primaryEvent.allDates.length > 1 && !matchedStage) {
     const formattedDates = primaryEvent.allDates.map(d => formatMonthDay(d));
     multiDateStr = ` (${formattedDates.join(', ')})`;
   }
@@ -252,6 +356,7 @@ export function generateLocalDeterministicResponse(
   const lower = query.toLowerCase();
   const constraints = constraintsInput || parseQueryConstraints(query, nowDate);
   const dedupedEvents = deduplicateEvents(events);
+  const todayStr = toDateString(nowDate);
 
   // 1. HIGHEST PRIORITY: Entity-Specific Queries (e.g. "do i have idfc test today?")
   if (constraints.isEntitySpecific) {
@@ -261,7 +366,6 @@ export function generateLocalDeterministicResponse(
   // 2. "Today and Tomorrow" Query (e.g. "what all do i have today and tomorrow?")
   const dateRange = detectedRange || constraints.dateRange || parseQueryDateRange(query, nowDate);
   if (dateRange.isDateQuery && dateRange.isTodayAndTomorrow) {
-    const todayStr = toDateString(nowDate);
     const tomDate = new Date(nowDate);
     tomDate.setDate(tomDate.getDate() + 1);
     const tomStr = toDateString(tomDate);
@@ -298,7 +402,7 @@ export function generateLocalDeterministicResponse(
       res += `- Nothing specifically scheduled for today.\n\n`;
     } else {
       todayActive.forEach(ev => {
-        res += `- ${summarizeEventNaturally(ev, 'today')}\n`;
+        res += `- ${summarizeEventNaturally(ev, 'today', todayStr)}\n`;
       });
       res += '\n';
     }
@@ -307,7 +411,7 @@ export function generateLocalDeterministicResponse(
     res += `### Tomorrow (${formatWeekdayMonthDay(tomStr)})\n\n`;
     if (tomNewEvents.length > 0) {
       tomNewEvents.forEach(ev => {
-        res += `- ${summarizeEventNaturally(ev, 'tomorrow')}\n`;
+        res += `- ${summarizeEventNaturally(ev, 'tomorrow', tomStr)}\n`;
       });
       if (continuingWindows.length > 0) {
         const winTitles = continuingWindows.map(w => `**${w.title}**`).join(', ');
@@ -334,7 +438,7 @@ export function generateLocalDeterministicResponse(
     if (comingSoon.length > 0) {
       res += `\n### Coming Up Soon\n\n`;
       comingSoon.slice(0, 3).forEach(ev => {
-        res += `- ${summarizeEventNaturally(ev, 'upcoming')}\n`;
+        res += `- ${summarizeEventNaturally(ev, 'upcoming', futureLimitStr)}\n`;
       });
     }
 
@@ -349,18 +453,22 @@ export function generateLocalDeterministicResponse(
       }
       let res = `### Obligations Due Today (${dedupedEvents.length})\n\n`;
       dedupedEvents.forEach(ev => {
-        res += `- ${summarizeEventNaturally(ev, 'today')}\n`;
+        res += `- ${summarizeEventNaturally(ev, 'today', todayStr)}\n`;
       });
       return res.trim();
     }
 
     if (dateRange.label === 'Tomorrow') {
+      const tomDate = new Date(nowDate);
+      tomDate.setDate(tomDate.getDate() + 1);
+      const tomStr = toDateString(tomDate);
+
       if (dedupedEvents.length === 0) {
         return 'You have no scheduled items or deadlines due **tomorrow**.';
       }
       let res = `### Scheduled for Tomorrow (${dedupedEvents.length})\n\n`;
       dedupedEvents.forEach(ev => {
-        res += `- ${summarizeEventNaturally(ev, 'tomorrow')}\n`;
+        res += `- ${summarizeEventNaturally(ev, 'tomorrow', tomStr)}\n`;
       });
       return res.trim();
     }
@@ -372,7 +480,7 @@ export function generateLocalDeterministicResponse(
     let res = `### Schedule for ${dateRange.label || `${formatMonthDay(dateRange.startDate)}–${formatMonthDay(dateRange.endDate)}`}\n\n`;
 
     dedupedEvents.forEach(ev => {
-      res += `- ${summarizeEventNaturally(ev, 'upcoming')}\n`;
+      res += `- ${summarizeEventNaturally(ev, 'upcoming', dateRange.startDate)}\n`;
     });
 
     return res.trim();
@@ -385,7 +493,7 @@ export function generateLocalDeterministicResponse(
     }
     let res = `### Upcoming Tests & Assessments (${dedupedEvents.length})\n\n`;
     dedupedEvents.forEach(ev => {
-      res += `- ${summarizeEventNaturally(ev, 'upcoming')}\n`;
+      res += `- ${summarizeEventNaturally(ev, 'upcoming', todayStr)}\n`;
     });
     return res.trim();
   }
@@ -397,7 +505,7 @@ export function generateLocalDeterministicResponse(
 
   let res = `### Summary of Relevant Items (${dedupedEvents.length})\n\n`;
   dedupedEvents.slice(0, 5).forEach(ev => {
-    res += `- ${summarizeEventNaturally(ev, 'upcoming')}\n`;
+    res += `- ${summarizeEventNaturally(ev, 'upcoming', todayStr)}\n`;
   });
   return res.trim();
 }

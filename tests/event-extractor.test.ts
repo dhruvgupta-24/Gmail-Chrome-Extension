@@ -8,6 +8,8 @@ import {
   extractProcessStages
 } from '../src/services/extraction/event-extractor';
 import { deduplicateEvents } from '../src/storage/local-search';
+import { generateLocalDeterministicResponse } from '../src/services/ai/local-responder';
+import { parseQueryConstraints } from '../src/services/retrieval/intent';
 import { ParsedEmailMessage } from '../src/types/gmail';
 
 describe('Event Extractor & Deduplication', () => {
@@ -41,10 +43,10 @@ describe('Event Extractor & Deduplication', () => {
     expect(actionDescription).toContain('3:50PM');
   });
 
-  it('extracts process stages from real recruitment process table text', () => {
+  it('extracts process stages and stage-specific links from real recruitment process table text', () => {
     const tableText = `
 Process Description\tDate\tDay\tTime\tMode
-PPT\t14-Aug-26\tFriday\t4:30 PM\tVirtual
+PPT\t14-Aug-26\tFriday\t4:30 PM\tVirtual\thttps://teams.microsoft.com/l/meetup-join/ppt
 Technical Assessment\t16-Aug-26\tSunday\t4:00 PM\tVirtual
 Interview\tYet to Decide\tIn Campus
     `;
@@ -62,11 +64,13 @@ Interview\tYet to Decide\tIn Campus
     expect(pptStage).toBeDefined();
     expect(pptStage?.date).toBe('2026-08-14');
     expect(pptStage?.time).toBe('4:30 PM');
+    expect(pptStage?.links?.[0].url).toContain('teams.microsoft.com');
 
     const assessStage = stages.find(s => s.type === 'assessment');
     expect(assessStage).toBeDefined();
     expect(assessStage?.date).toBe('2026-08-16');
     expect(assessStage?.time).toBe('4:00 PM');
+    expect(assessStage?.links).toBeUndefined();
 
     const interviewStage = stages.find(s => s.type === 'interview');
     expect(interviewStage).toBeDefined();
@@ -114,7 +118,8 @@ Interview\tYet to Decide\tIn Campus
     expect(deduped[0].sourceMessages.length).toBe(2);
   });
 
-  it('TEST G & Real Gmail Data: Extracts table schedule, merges update email, and sets status to TODAY on Aug 16', () => {
+  it('REAL GMAIL SCENARIO: Handles "Link will be shared by 3:50PM" with NO fake URLs and NO leaked Teams links on Assessment', () => {
+    // Email 1: Process table with Teams link for PPT
     const email1: ParsedEmailMessage = {
       id: 'msg-info1',
       threadId: 'th-infoedge',
@@ -128,14 +133,15 @@ Interview\tYet to Decide\tIn Campus
       snippet: 'Infoedge hiring process schedule',
       plainText: `
 Process Description\tDate\tDay\tTime\tMode
-PPT\t14-Aug-26\tFriday\t4:30 PM\tVirtual
+PPT\t14-Aug-26\tFriday\t4:30 PM\tVirtual\thttps://teams.microsoft.com/l/meetup-join/ppt
 Technical Assessment\t16-Aug-26\tSunday\t4:00 PM\tVirtual
 Interview\tYet to Decide\tIn Campus
       `,
-      links: [],
+      links: [{ text: 'Join Teams', href: 'https://teams.microsoft.com/l/meetup-join/ppt' }],
       labels: ['INBOX']
     };
 
+    // Email 2: Update email with ONLY text instruction: "Link will be shared by 3:50PM", NO URLs
     const email2: ParsedEmailMessage = {
       id: 'msg-info2',
       threadId: 'th-infoedge',
@@ -147,8 +153,8 @@ Interview\tYet to Decide\tIn Campus
       date: '2026-08-15T08:00:00Z',
       timestamp: new Date('2026-08-15T08:00:00Z').getTime(),
       snippet: 'Important test instructions for Infoedge',
-      plainText: 'Please find the list of eligible students. Test will be active between 4 pm - 5:30 pm. Link will be shared by 3:50PM. Link: https://assessment.infoedge.com',
-      links: [{ text: 'Assessment Portal', href: 'https://assessment.infoedge.com' }],
+      plainText: 'Please find the list of eligible students. Test will be active between 4 pm - 5:30 pm. Link will be shared by 3:50PM.',
+      links: [],
       labels: ['INBOX']
     };
 
@@ -168,6 +174,34 @@ Interview\tYet to Decide\tIn Campus
     expect(merged.actionDescription).toContain('4 pm - 5:30 pm');
     expect(merged.actionDescription).toContain('3:50PM');
     expect(merged.stages?.length).toBe(3);
-    expect(merged.links.some(l => l.url.includes('assessment.infoedge.com'))).toBe(true);
+
+    // Verify stage 0 (PPT) has Teams link, but stage 1 (Technical Assessment) has NO link
+    const ppt = merged.stages?.find(s => s.type === 'ppt');
+    const assess = merged.stages?.find(s => s.type === 'assessment');
+    expect(ppt?.links?.[0].url).toContain('teams.microsoft.com');
+    expect(assess?.links).toBeUndefined();
+
+    // Query for Today on Aug 16:
+    const queryToday = 'what do i have today?';
+    const resToday = generateLocalDeterministicResponse(queryToday, [merged], fixedAug16);
+
+    // Must describe Technical Assessment with accurate timing instructions
+    expect(resToday).toContain('Technical Assessment');
+    expect(resToday).toContain('4:00 PM');
+    expect(resToday).toContain('4 pm - 5:30 pm');
+    expect(resToday).toContain('3:50PM');
+
+    // Must NOT contain fake URLs or Teams meeting URLs for assessment
+    expect(resToday).not.toContain('assessment.infoedge.com');
+    expect(resToday).not.toContain('teams.microsoft.com');
+    expect(resToday).not.toContain('PPT');
+
+    // Query for Infoedge Link:
+    const queryLink = 'where is the infoedge link?';
+    const constraintsLink = parseQueryConstraints(queryLink, fixedAug16);
+    const resLink = generateLocalDeterministicResponse(queryLink, [merged], fixedAug16, undefined, undefined, constraintsLink);
+
+    expect(resLink).toContain('No direct test link was found');
+    expect(resLink).toContain('3:50PM');
   });
 });

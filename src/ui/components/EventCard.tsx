@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { ExtractedEvent } from '../../types/events';
-import { formatEventSemanticDate, openGmailMessageInCurrentTab } from '../../shared/utils';
+import { ExtractedEvent, ActionLink } from '../../types/events';
+import { formatEventSemanticDate, openGmailMessageInCurrentTab, getTodayDateString } from '../../shared/utils';
+import { getBestActionLinkForStage } from '../../services/ai/local-responder';
 import {
   ExternalLink,
   Mail,
@@ -13,7 +14,8 @@ import {
   Code2,
   Users,
   GraduationCap,
-  Calendar
+  Calendar,
+  Video
 } from 'lucide-react';
 
 interface EventCardProps {
@@ -22,6 +24,19 @@ interface EventCardProps {
 
 export const EventCard: React.FC<EventCardProps> = ({ event }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Identify active stage for the card context (today or next upcoming stage)
+  const todayStr = getTodayDateString();
+  const activeTodayStage = (event.stages || []).find(s => s.date === todayStr);
+  const activeUpcomingStage = (event.stages || []).find(s => s.date && s.date >= todayStr);
+  const activeStage = activeTodayStage || activeUpcomingStage;
+
+  const displayType = activeStage ? activeStage.type : event.type;
+  const displayTitle = activeStage
+    ? (event.company && !activeStage.name.toLowerCase().includes(event.company.toLowerCase())
+        ? `${event.company} ${activeStage.name}`
+        : activeStage.name)
+    : event.title;
 
   const getStatusBadge = () => {
     switch (event.status) {
@@ -50,7 +65,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
   };
 
   const getTypeIcon = () => {
-    switch (event.type) {
+    switch (displayType) {
       case 'test':
       case 'exam':
       case 'quiz':
@@ -60,6 +75,8 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
         return <Code2 className="w-3.5 h-3.5 text-purple-500" />;
       case 'interview':
         return <Users className="w-3.5 h-3.5 text-emerald-500" />;
+      case 'ppt':
+        return <Video className="w-3.5 h-3.5 text-indigo-500" />;
       case 'assignment':
       case 'submission':
       case 'registration':
@@ -69,21 +86,31 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
     }
   };
 
+  // Filter links specifically relevant to the active stage (excluding meeting links on assessment stages!)
   const actionableLinks = React.useMemo(() => {
-    const seen = new Set<string>();
-    const out: typeof event.links = [];
-    for (const l of event.links || []) {
-      const normUrl = l.url.trim().toLowerCase().replace(/\/+$/, '');
-      const normLabel = l.label.trim().toLowerCase();
-      const key = `${normUrl}|${normLabel}`;
-      if (!seen.has(key) && !seen.has(normUrl)) {
-        seen.add(key);
-        seen.add(normUrl);
-        out.push(l);
+    const rawLinks = event.links || [];
+    const filtered: ActionLink[] = [];
+
+    if (activeStage) {
+      const best = getBestActionLinkForStage(activeStage.type, activeStage.links, rawLinks);
+      if (best) {
+        filtered.push(best);
+      }
+    } else {
+      const seen = new Set<string>();
+      for (const l of rawLinks) {
+        const normUrl = l.url.trim().toLowerCase().replace(/\/+$/, '');
+        const normLabel = l.label.trim().toLowerCase();
+        const key = `${normUrl}|${normLabel}`;
+        if (!seen.has(key) && !seen.has(normUrl)) {
+          seen.add(key);
+          seen.add(normUrl);
+          filtered.push(l);
+        }
       }
     }
-    return out;
-  }, [event.links]);
+    return filtered;
+  }, [event.links, activeStage]);
 
   const primarySource = event.sourceMessages[0];
 
@@ -102,7 +129,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
           {getStatusBadge()}
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 capitalize">
             {getTypeIcon()}
-            {event.type.replace('_', ' ')}
+            {displayType.replace('_', ' ')}
           </span>
         </div>
 
@@ -116,7 +143,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
 
       {/* Title */}
       <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100 leading-snug line-clamp-2">
-        {event.title}
+        {displayTitle}
       </h3>
 
       {/* Meta: Organization & Semantic Date */}

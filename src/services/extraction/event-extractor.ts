@@ -100,7 +100,7 @@ export function detectActionRequired(subject: string, body: string): { actionReq
   if (activeWindowMatch || linkShareMatch) {
     const parts: string[] = [];
     if (activeWindowMatch) {
-      parts.push(`The test will be active ${activeWindowMatch[0].trim()}`);
+      parts.push(`The test will be active ${activeWindowMatch[1].trim()}`);
     }
     if (linkShareMatch) {
       parts.push(`the link is expected to be shared by ${linkShareMatch[1].trim()}`);
@@ -220,6 +220,7 @@ export function extractProcessStages(
         } else {
           const parsed = parseDateFromEmailText(contextText, '', emailTimestamp, nowDate);
           const stageTime = parsed.time || extractTimeFromText(contextText);
+          const stageLinks = extractActionLinks(contextText);
 
           if (parsed.date || stageTime) {
             if (!stages.some(s => s.type === type && s.date === parsed.date)) {
@@ -229,7 +230,8 @@ export function extractProcessStages(
                 date: parsed.date,
                 time: stageTime,
                 status: 'scheduled',
-                details: line
+                details: line,
+                links: stageLinks.length > 0 ? stageLinks : undefined
               });
             }
           }
@@ -369,7 +371,8 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
         date: s.date || prev.date,
         time: s.time || prev.time,
         status: s.status || prev.status,
-        details: s.details && s.details.length >= (prev.details || '').length ? s.details : prev.details
+        details: s.details && s.details.length >= (prev.details || '').length ? s.details : prev.details,
+        links: (s.links && s.links.length > 0) ? s.links : prev.links
       });
     }
   });
