@@ -335,6 +335,7 @@ export function extractActionLinks(htmlOrText: string): ActionLink[] {
 
 /**
  * Deduplicates links semantically:
+ * - Eliminates prefix/truncated URLs (e.g. forms.gle/abc vs forms.gle/abc123xyz).
  * - Collapses duplicate action buttons with identical canonical destinations.
  * - Suppresses generic root homepages (e.g. unstop.com) if a specific deep-link exists.
  * - Preserves genuinely distinct actions (e.g. Apply, Join Teams, View Results).
@@ -351,7 +352,7 @@ export function deduplicateActionLinks(links: ActionLink[]): ActionLink[] {
     return u.includes('unstop.com/') && !u.endsWith('unstop.com') && !u.endsWith('unstop.com/');
   });
 
-  // Prioritize high-value action links (assessments, registrations, meetings first)
+  // Prioritize high-value action links and longer/more specific URLs
   const priorityOrder: Record<ActionLinkType, number> = {
     assessment: 1,
     registration: 2,
@@ -361,9 +362,13 @@ export function deduplicateActionLinks(links: ActionLink[]): ActionLink[] {
     general: 6
   };
 
-  const sortedCandidates = [...links].sort(
-    (a, b) => (priorityOrder[a.type || 'general'] || 10) - (priorityOrder[b.type || 'general'] || 10)
-  );
+  const sortedCandidates = [...links].sort((a, b) => {
+    const pA = priorityOrder[a.type || 'general'] || 10;
+    const pB = priorityOrder[b.type || 'general'] || 10;
+    if (pA !== pB) return pA - pB;
+    // Prefer longer URLs (full deep link over truncated snippet)
+    return b.url.length - a.url.length;
+  });
 
   for (const item of sortedCandidates) {
     const cleanUrl = sanitizeUrl(item.url);
@@ -374,8 +379,27 @@ export function deduplicateActionLinks(links: ActionLink[]): ActionLink[] {
       continue;
     }
 
-    // Canonical key based on destination URL
+    // Check if this URL is an exact duplicate
     if (seenCanonicalUrls.has(normUrl)) {
+      continue;
+    }
+
+    // Check if this URL is a truncated prefix of an already-selected longer canonical URL
+    // e.g. "https://forms.gle/arAiR8Bi7" vs "https://forms.gle/arAiR8Bi7wyEaepT6"
+    const isTruncatedPrefix = Array.from(seenCanonicalUrls).some(existingUrl => {
+      try {
+        const u1 = new URL(normUrl);
+        const u2 = new URL(existingUrl);
+        if (u1.hostname === u2.hostname && existingUrl.startsWith(normUrl) && existingUrl.length > normUrl.length) {
+          return true;
+        }
+      } catch {
+        if (existingUrl.startsWith(normUrl) && existingUrl.length > normUrl.length) return true;
+      }
+      return false;
+    });
+
+    if (isTruncatedPrefix) {
       continue;
     }
 

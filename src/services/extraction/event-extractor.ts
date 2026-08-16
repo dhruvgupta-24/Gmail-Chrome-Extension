@@ -3,7 +3,7 @@ import { ParsedEmailMessage } from '../../types/gmail';
 import { parseDateFromEmailText, extractTimeFromText, calculateEventStatus } from './date-parser';
 import { extractActionLinks, deduplicateActionLinks } from '../gmail/links';
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 /**
  * Strips email reply/forward prefixes, tags, and extraneous whitespace to produce a clean display title.
@@ -128,8 +128,8 @@ export function detectEventType(subject: string, body: string = ''): EventType {
 /**
  * Normalizes time string into standard format e.g. "4:00 PM" or "5:30 PM".
  */
-function standardizeTimeString(raw: string): string {
-  const clean = raw.trim().replace(/\*/g, '').trim();
+export function standardizeTimeString(raw: string): string {
+  const clean = raw.trim().replace(/[*_~#\\]+/g, '').trim();
   const match = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
   if (!match) return clean;
 
@@ -141,18 +141,21 @@ function standardizeTimeString(raw: string): string {
 }
 
 /**
- * Normalizes operational action text, fixing punctuation, markdown artifacts, and time spacing.
+ * Normalizes operational action text in an IDEMPOTENT way:
+ * normalizeActionText(normalizeActionText(text)) === normalizeActionText(text).
  */
 export function normalizeActionText(text: string): string {
   if (!text) return '';
 
   let clean = text
-    // Strip markdown artifacts e.g. *, _, ~, #, \
+    // 1. Strip markdown artifacts e.g. *, _, ~, #, \
     .replace(/[*_~#\\]+/g, '')
+    // 2. Normalize repeated words e.g. "between between" -> "between", "active active" -> "active"
+    .replace(/\b(between|from|active|the|test|is|link|shared|by)\s+\1\b/gi, '$1')
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Normalize time ranges: "between 4 pm - 5:30 pm" -> "between 4:00 PM and 5:30 PM"
+  // 3. Normalize time ranges: "between 4 pm - 5:30 pm" -> "between 4:00 PM and 5:30 PM"
   clean = clean.replace(
     /\b(?:between|from)?\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:-|–|to|and)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/gi,
     (_match, t1, t2) => {
@@ -162,16 +165,23 @@ export function normalizeActionText(text: string): string {
     }
   );
 
-  // Normalize single time targets: "by 3:50PM" -> "by 3:50 PM"
+  // 4. Normalize single time targets: "by 3:50PM" -> "by 3:50 PM"
   clean = clean.replace(
     /\bby\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/gi,
     (_match, t) => `by ${standardizeTimeString(t)}`
   );
 
-  // Clean spaces before punctuation
-  clean = clean.replace(/\s+,/g, ',').replace(/\s+\./g, '.');
+  // 5. Clean spaces before punctuation
+  clean = clean
+    .replace(/\s+,/g, ',')
+    .replace(/\s+\./g, '.')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  // Ensure trailing period
+  // 6. Clean consecutive duplicate words again if formed after replacements
+  clean = clean.replace(/\b(between|from|active|the|test|is|link|shared|by)\s+\1\b/gi, '$1');
+
+  // 7. Ensure trailing period
   if (clean && !/[.!?]$/.test(clean)) {
     clean = `${clean}.`;
   }
@@ -180,7 +190,7 @@ export function normalizeActionText(text: string): string {
 }
 
 /**
- * Detects if action is required from the recipient and extracts operational details.
+ * Detects if action is required from the recipient and extracts operational details cleanly.
  */
 export function detectActionRequired(subject: string, body: string): { actionRequired: boolean; actionDescription?: string } {
   const combined = `${subject}\n${body}`;
@@ -194,12 +204,13 @@ export function detectActionRequired(subject: string, body: string): { actionReq
   if (activeWindowMatch || linkShareMatch) {
     const parts: string[] = [];
     if (activeWindowMatch) {
-      const rawWindow = activeWindowMatch[1].trim().replace(/\*/g, '').trim();
-      const normWindow = normalizeActionText(`active ${rawWindow}`).replace(/\.$/, '');
-      parts.push(`The test will be ${normWindow}`);
+      const rawWindow = activeWindowMatch[1].trim().replace(/[*_~#\\]+/g, '').trim();
+      const normRange = rawWindow.replace(/^between\s+/i, '').replace(/^from\s+/i, '');
+      const rangeText = normalizeActionText(`between ${normRange}`).replace(/\.$/, '');
+      parts.push(`The test will be active ${rangeText}`);
     }
     if (linkShareMatch) {
-      const rawShare = linkShareMatch[1].trim().replace(/\*/g, '').trim();
+      const rawShare = linkShareMatch[1].trim().replace(/[*_~#\\]+/g, '').trim();
       const normShare = standardizeTimeString(rawShare);
       parts.push(`the link is expected to be shared by ${normShare}`);
     }
@@ -256,6 +267,26 @@ export function isPersonalName(name: string): boolean {
 }
 
 /**
+ * Cleans track, stage descriptors, and extra words from raw organization strings.
+ * e.g. "Sigmoid Data Engineering Track PPT & OA" -> "Sigmoid"
+ */
+export function cleanOrganizationName(rawOrg: string): string {
+  if (!rawOrg) return '';
+  let org = rawOrg.trim();
+
+  // Strip track and stage descriptors
+  org = org
+    .replace(/\b(?:data|software|cloud|full\s*stack|ai|ml|system|business)\s+engineering\s+track\b/gi, '')
+    .replace(/\b[a-z0-9&.' -]+\s+track\b/gi, '')
+    .replace(/\b(?:ppt\s*(?:&|and)\s*oa|ppt|oa|online\s+assessment|technical\s+assessment|hiring\s+process|campus\s+drive|recruitment\s+drive|internship\s+drive)\b/gi, '')
+    .replace(/[-|&,:]+$/, '')
+    .replace(/^[-|&,:]+/, '')
+    .trim();
+
+  return org || rawOrg.trim();
+}
+
+/**
  * Extracts organization or company generically from subject structure, sender, and content.
  */
 export function extractOrganization(senderName: string, subject: string, body: string = ''): string {
@@ -265,23 +296,23 @@ export function extractOrganization(senderName: string, subject: string, body: s
   // 1. Structured subject delimiters: "Campus Details | <Company> | ..." or "Campus Drive: <Company>"
   const pipeMatch = cleanSub.match(/^(?:campus\s+details?|campus\s+drive|recruitment\s+drive|placement\s+details?)\s*\|\s*([^|]+?)(?:\s*\||$)/i);
   if (pipeMatch && pipeMatch[1]) {
-    const org = pipeMatch[1].trim();
-    if (org && !/^\d/.test(org) && org.length > 1 && !/^(microsoft\s+teams|google|zoom)$/i.test(org)) {
-      return org;
+    const rawOrg = pipeMatch[1].trim();
+    if (rawOrg && !/^\d/.test(rawOrg) && rawOrg.length > 1 && !/^(microsoft\s+teams|google|zoom)$/i.test(rawOrg)) {
+      return cleanOrganizationName(rawOrg);
     }
   }
 
   const bracketMatch = cleanSub.match(/^\[([^\]]+)\]/);
   if (bracketMatch && bracketMatch[1]) {
-    const org = bracketMatch[1].trim();
-    if (org && !/^(external|urgent|important|reminder|action required)$/i.test(org) && !/^(microsoft\s+teams|google|zoom)$/i.test(org)) {
-      return org;
+    const rawOrg = bracketMatch[1].trim();
+    if (rawOrg && !/^(external|urgent|important|reminder|action required)$/i.test(rawOrg) && !/^(microsoft\s+teams|google|zoom)$/i.test(rawOrg)) {
+      return cleanOrganizationName(rawOrg);
     }
   }
 
   const opportunityMatch = cleanSub.match(/(?:Opportunity\s*-\s*|Details\s+for\s+|Drive\s+by\s+)([A-Z0-9&.' -]{2,30})/i);
   if (opportunityMatch && opportunityMatch[1]) {
-    return opportunityMatch[1].trim();
+    return cleanOrganizationName(opportunityMatch[1].trim());
   }
 
   // 2. Pattern matching against subject & body for recognizable companies & institutional programs
@@ -291,22 +322,28 @@ export function extractOrganization(senderName: string, subject: string, body: s
     if (/^info\s*edge/i.test(org) || /^naukri/i.test(org)) {
       org = 'Infoedge India Ltd.';
     }
-    return org;
+    return cleanOrganizationName(org);
   }
 
   // Check institutional competitions/awards in subject (e.g. Smart India Hackathon, VC Excellence Award)
   if (/\b(sih\s*20\d\d|smart\s+india\s+hackathon)\b/i.test(combined)) {
     return 'Smart India Hackathon';
   }
+
+  // Check specific University/Institution names from body/header/subject before falling back to generic "University"
   if (/\b(vc['’]?s\s+excellence\s+award|vice\s+chancellor)\b/i.test(combined)) {
-    return 'University';
+    const uniMatch = combined.match(/\b((?:[A-Z][a-zA-Z.'&]+\s+){1,6}(?:University|Institute of Technology|College of Engineering|Deemed University))\b/);
+    if (uniMatch && uniMatch[1]) {
+      return uniMatch[1].trim();
+    }
+    return 'Vice Chancellor Office';
   }
 
   // 3. Sender Name fallback ONLY if it is an organization and NOT a personal name
   if (senderName && !senderName.includes('@')) {
     const cleanSender = senderName.replace(/^["']|["']$/g, '').trim();
     if (cleanSender && !isPersonalName(cleanSender) && !/^(microsoft\s+teams|google\s+forms|zoom\s+video)$/i.test(cleanSender)) {
-      return cleanSender;
+      return cleanOrganizationName(cleanSender);
     }
   }
 
@@ -393,6 +430,25 @@ export function extractProcessStages(
     }
   }
 
+  // If subject explicitly mentions multiple stages e.g. "Sigmoid ... PPT & OA Online Assessment" and no stages were extracted from body table
+  if (stages.length === 0 && /\bppt\b/i.test(subject) && /\b(?:oa|assessment|test)\b/i.test(subject)) {
+    const parsed = parseDateFromEmailText(subject, body, emailTimestamp, nowDate);
+    stages.push({
+      name: 'Pre-Placement Talk (PPT)',
+      type: 'ppt',
+      status: 'scheduled',
+      date: parsed.date || parsed.startDate,
+      time: parsed.time
+    });
+    stages.push({
+      name: 'Online Assessment (OA)',
+      type: 'assessment',
+      status: 'scheduled',
+      date: parsed.endDate || parsed.date || parsed.startDate,
+      time: parsed.time
+    });
+  }
+
   return stages;
 }
 
@@ -430,15 +486,13 @@ export function extractEventFromEmail(email: ParsedEmailMessage, nowDate: Date =
     stages
   );
 
-  // Extract and sanitize actionable links
+  // Extract and sanitize actionable links with strict provenance
   const links = extractActionLinks(email.plainText);
 
-  // Generate normalized deterministic ID
-  const normTitle = normalizeTitleForDeduplication(cleanTitle);
-  const orgKey = (organization || 'general').toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Generate unique deterministic ID tied to thread or message
   const eventId = email.threadId
     ? `thread-${email.threadId}`
-    : `event-${orgKey}-${normTitle.substring(0, 30).replace(/\s+/g, '-')}`;
+    : `msg-${email.id}`;
 
   return {
     id: eventId,
@@ -524,13 +578,21 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
     ? existing.organization
     : (incoming.organization || existing.organization);
 
-  // Preserve cleaner action description without repetitive prepends
-  let actionDescription = primary.actionDescription || secondary.actionDescription;
-  if (primary.actionDescription && secondary.actionDescription && primary.actionDescription !== secondary.actionDescription) {
-    if (!primary.actionDescription.includes(secondary.actionDescription) && !secondary.actionDescription.includes(primary.actionDescription)) {
-      actionDescription = `${primary.actionDescription} ${secondary.actionDescription}`.trim();
+  // Semantic sentence-level deduplication for actionDescription
+  const sentenceSet = new Set<string>();
+  const rawSentences = `${existing.actionDescription || ''} ${incoming.actionDescription || ''}`
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  for (const sentence of rawSentences) {
+    const normalized = normalizeActionText(sentence);
+    if (normalized && !Array.from(sentenceSet).some(existing => existing.includes(normalized) || normalized.includes(existing))) {
+      sentenceSet.add(normalized);
     }
   }
+
+  const combinedActionDesc = Array.from(sentenceSet).join(' ');
 
   const stagesList = Array.from(stageMap.values());
 
@@ -548,7 +610,7 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
     allDates: allDates.length > 0 ? allDates : undefined,
     stages: stagesList.length > 0 ? stagesList : undefined,
     actionRequired: primary.actionRequired || secondary.actionRequired,
-    actionDescription: normalizeActionText(actionDescription || ''),
+    actionDescription: combinedActionDesc ? normalizeActionText(combinedActionDesc) : undefined,
     links: mergedLinks,
     sourceMessages: Array.from(sourceMap.values()),
     status: calculateEventStatus(

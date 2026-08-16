@@ -42,6 +42,29 @@ describe('Link Extractor, Unwrapper and Semantic Deduplication', () => {
     expect(deduped.filter(l => l.label === 'Open Registration Form').length).toBe(1);
   });
 
+  it('DEDUPLICATION: Collapses truncated/prefix Google Forms variants into the single longer canonical form', () => {
+    const rawLinks: ActionLink[] = [
+      { label: 'Open Registration Form', url: 'https://forms.gle/arAiR8Bi7', type: 'registration' },
+      { label: 'Open Registration Form', url: 'https://forms.gle/arAiR8Bi7wyEaepT6', type: 'registration' }
+    ];
+
+    const deduped = deduplicateActionLinks(rawLinks);
+    expect(deduped.length).toBe(1);
+    expect(deduped[0].url).toBe('https://forms.gle/arAiR8Bi7wyEaepT6');
+  });
+
+  it('DEDUPLICATION: Preserves genuinely distinct Google Forms on the same event', () => {
+    const rawLinks: ActionLink[] = [
+      { label: 'Team Registration Form', url: 'https://forms.gle/formAlpha123', type: 'registration' },
+      { label: 'Mentor Registration Form', url: 'https://forms.gle/formBeta456', type: 'registration' }
+    ];
+
+    const deduped = deduplicateActionLinks(rawLinks);
+    expect(deduped.length).toBe(2);
+    expect(deduped.some(l => l.url.includes('formAlpha123'))).toBe(true);
+    expect(deduped.some(l => l.url.includes('formBeta456'))).toBe(true);
+  });
+
   it('DEDUPLICATION: Suppresses generic root homepage (unstop.com) when a specific deep-link exists', () => {
     const mixedUnstop: ActionLink[] = [
       { label: 'Register on Unstop', url: 'https://unstop.com/competitions/adobe-hackathon-2026', type: 'registration' },

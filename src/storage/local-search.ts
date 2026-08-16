@@ -56,14 +56,14 @@ export function deduplicateEvents(events: ExtractedEvent[]): ExtractedEvent[] {
         const existingOrg = (existing.company || existing.organization || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         const existingIsSpecific = !GENERIC_PLATFORMS.has(existingOrg);
 
-        // Same specific company AND matching title
-        if (isSpecificOrg && existingIsSpecific && org === existingOrg && (normTitle === existingNorm)) {
-          matchedKey = k;
-          break;
-        }
-
-        // Exact long title match (e.g. identical forwarded university circulars with same date)
-        if (normTitle.length > 20 && normTitle === existingNorm && (ev.date === existing.date || !ev.date || !existing.date)) {
+        // Same specific company AND exact matching clean title AND matching date
+        if (
+          isSpecificOrg &&
+          existingIsSpecific &&
+          org === existingOrg &&
+          normTitle === existingNorm &&
+          (ev.date === existing.date || !ev.date || !existing.date)
+        ) {
           matchedKey = k;
           break;
         }

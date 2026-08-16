@@ -70,6 +70,45 @@ describe('Event Extractor & Deduplication', () => {
     const rawMalformed = 'The test will be active between 4 pm - 5:30 pm *, and the link is expected to be shared by 3:50PM.';
     const normalized = normalizeActionText(rawMalformed);
     expect(normalized).toBe('The test will be active between 4:00 PM and 5:30 PM, and the link is expected to be shared by 3:50 PM.');
+
+    // IDEMPOTENCY: Re-normalizing already normalized text must produce the exact same text (no "betweenbetween")
+    const reNormalized = normalizeActionText(normalized);
+    expect(reNormalized).toBe(normalized);
+    expect(reNormalized).not.toContain('betweenbetween');
+    expect(reNormalized).not.toContain('activeactive');
+  });
+
+  it('ORGANIZATION EXTRACTION: Strips track and stage descriptors from company name (Sigmoid fix)', () => {
+    const org = extractOrganization(
+      'Placement Team',
+      'Sigmoid Data Engineering Track PPT & OA Online Assessment',
+      'Eligibility list and assessment schedule for Sigmoid'
+    );
+    expect(org).toBe('Sigmoid');
+    expect(org).not.toContain('Data Engineering Track');
+    expect(org).not.toContain('PPT & OA');
+  });
+
+  it('ORGANIZATION EXTRACTION: Extracts specific university name instead of generic fallback', () => {
+    const org = extractOrganization(
+      'VC Secretariat',
+      "Call for Nominations – VC's Excellence Award (2025–26) for Teaching Staff - Step I",
+      'Issued by D. Y. Patil International University, Akurdi, Pune for the academic year 2025-26.'
+    );
+    expect(org).toBe('D. Y. Patil International University');
+  });
+
+  it('MULTI-STAGE EXTRACTION: Detects both PPT and OA stages from multi-stage subject (Sigmoid fix)', () => {
+    const stages = extractProcessStages(
+      'Sigmoid Data Engineering Track PPT & OA Online Assessment',
+      'Pre-Placement talk on 20-Aug-2026 at 10:00 AM. Technical Assessment on 21-Aug-2026 at 2:00 PM.',
+      new Date('2026-08-14T08:00:00Z').getTime(),
+      fixedAug16
+    );
+
+    expect(stages.length).toBeGreaterThanOrEqual(2);
+    expect(stages.some(s => s.type === 'ppt')).toBe(true);
+    expect(stages.some(s => s.type === 'assessment')).toBe(true);
   });
 
   it('PART 5 ACTIVE DATE-RANGE UI WORDING: Formats continuous active window clearly on active dates', () => {
