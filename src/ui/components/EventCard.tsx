@@ -69,7 +69,22 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
     }
   };
 
-  const actionableLinks = event.links || [];
+  const actionableLinks = React.useMemo(() => {
+    const seen = new Set<string>();
+    const out: typeof event.links = [];
+    for (const l of event.links || []) {
+      const normUrl = l.url.trim().toLowerCase().replace(/\/+$/, '');
+      const normLabel = l.label.trim().toLowerCase();
+      const key = `${normUrl}|${normLabel}`;
+      if (!seen.has(key) && !seen.has(normUrl)) {
+        seen.add(key);
+        seen.add(normUrl);
+        out.push(l);
+      }
+    }
+    return out;
+  }, [event.links]);
+
   const primarySource = event.sourceMessages[0];
 
   const handleOpenEmail = (e: React.MouseEvent) => {

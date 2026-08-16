@@ -89,7 +89,20 @@ export function formatEventSemanticDate(event: ExtractedEvent): string {
     return `${MONTH_NAMES[parts[1] - 1]} ${parts[2]}, ${parts[0]}`;
   };
 
-  // 1. Point-in-time deadline
+  // 1. Process stages (e.g. PPT on Aug 14, Technical Assessment on Aug 16 at 4:00 PM)
+  if (event.stages && event.stages.length > 0) {
+    const todayStr = getTodayDateString();
+    const activeTodayStage = event.stages.find(s => s.date === todayStr);
+    if (activeTodayStage) {
+      return `Today: ${activeTodayStage.name}${activeTodayStage.time ? ` at ${activeTodayStage.time}` : ''}`;
+    }
+    const upcomingStage = event.stages.find(s => s.date && s.date >= todayStr);
+    if (upcomingStage && upcomingStage.date) {
+      return `${upcomingStage.name}: ${formatIsoDateClean(upcomingStage.date)}${upcomingStage.time ? ` at ${upcomingStage.time}` : ''}`;
+    }
+  }
+
+  // 2. Point-in-time deadline
   if (event.isDeadline || event.deadline) {
     const rawDate = (event.deadline || event.date || '').split(' ')[0];
     const dateStr = formatIsoDateClean(rawDate);
@@ -98,12 +111,12 @@ export function formatEventSemanticDate(event: ExtractedEvent): string {
     return `${isReg ? 'Registration Deadline' : 'Deadline'}: ${dateStr}${timeStr}`;
   }
 
-  // 2. Continuous window
+  // 3. Continuous window
   if (event.isContinuousRange && event.startDate && event.endDate) {
     return `Test window: ${formatHumanDate(event.startDate, undefined, event.endDate, true)}`;
   }
 
-  // 3. Discrete multi-dates list
+  // 4. Discrete multi-dates list
   if (event.allDates && event.allDates.length > 1) {
     const formatted = event.allDates.map(d => {
       const parts = d.split('-').map(Number);

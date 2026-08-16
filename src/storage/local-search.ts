@@ -150,7 +150,8 @@ export async function searchLocalDatabase(
       nowDate,
       event.endDate,
       event.isContinuousRange,
-      event.allDates
+      event.allDates,
+      event.stages
     );
     return {
       ...event,

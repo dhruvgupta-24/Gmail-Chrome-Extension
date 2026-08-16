@@ -60,6 +60,17 @@ function summarizeEventNaturally(ev: ExtractedEvent, context: 'today' | 'tomorro
   const bestLink = getBestActionLink(ev.links);
   const linkStr = bestLink ? ` [${bestLink.label}](${bestLink.url})` : '';
 
+  // 0. Process Stage Match (e.g. Infoedge Technical Assessment today at 4:00 PM)
+  if (ev.stages && ev.stages.length > 0) {
+    const stageToday = ev.stages.find(s => s.type === 'assessment' || s.type === 'coding_round' || s.type === 'test' || s.type === 'ppt' || s.type === 'interview');
+    if (context === 'today' && stageToday) {
+      const stageTime = stageToday.time ? ` at ${stageToday.time}` : (ev.time ? ` at ${ev.time}` : '');
+      const actionDesc = ev.actionDescription ? ` ${ev.actionDescription}` : '';
+      const prefix = ev.company && !stageToday.name.toLowerCase().includes(ev.company.toLowerCase()) ? `${ev.company} ` : '';
+      return `**${prefix}${stageToday.name}**${orgStr} — Scheduled for today${stageTime}.${actionDesc}${linkStr}`;
+    }
+  }
+
   // 1. Continuous window assessment (e.g. AIMCAT Aug 15–19)
   if (ev.isContinuousRange && ev.startDate && ev.endDate) {
     if (context === 'today') {
@@ -259,6 +270,7 @@ export function generateLocalDeterministicResponse(
     const todayActive = dedupedEvents.filter(e =>
       (e.isContinuousRange && e.startDate && e.endDate && todayStr >= e.startDate && todayStr <= e.endDate) ||
       (e.allDates && e.allDates.includes(todayStr)) ||
+      (e.stages && e.stages.some(s => s.date === todayStr)) ||
       (e.date === todayStr) ||
       (e.deadline && e.deadline.startsWith(todayStr)) ||
       e.status === 'today'
@@ -266,7 +278,7 @@ export function generateLocalDeterministicResponse(
 
     // Tomorrow items starting or happening specifically tomorrow
     const tomNewEvents = dedupedEvents.filter(e =>
-      (!e.isContinuousRange && (e.date === tomStr || (e.deadline && e.deadline.startsWith(tomStr)) || (e.allDates && e.allDates.includes(tomStr)))) ||
+      (!e.isContinuousRange && (e.date === tomStr || (e.deadline && e.deadline.startsWith(tomStr)) || (e.allDates && e.allDates.includes(tomStr)) || (e.stages && e.stages.some(s => s.date === tomStr)))) ||
       (e.isContinuousRange && e.startDate === tomStr)
     );
 

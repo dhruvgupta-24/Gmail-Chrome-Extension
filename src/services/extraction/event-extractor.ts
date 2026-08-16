@@ -1,9 +1,9 @@
 import { ExtractedEvent, EventType, ActionLink, ProcessStage } from '../../types/events';
 import { ParsedEmailMessage } from '../../types/gmail';
-import { parseDateFromEmailText, extractTimeFromText } from './date-parser';
+import { parseDateFromEmailText, extractTimeFromText, calculateEventStatus } from './date-parser';
 import { extractActionLinks } from '../gmail/links';
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 /**
  * Strips email reply/forward prefixes, tags, and extraneous whitespace to produce a clean display title.
@@ -161,7 +161,7 @@ export function extractOrganization(senderName: string, subject: string, body: s
 }
 
 /**
- * Extracts discrete recruitment process stages (PPT, Assessment, Interview, Registration) from email text.
+ * Extracts discrete recruitment process stages (PPT, Assessment, Interview, Registration) from table rows, lists, or text blocks.
  */
 export function extractProcessStages(
   subject: string,
@@ -171,54 +171,69 @@ export function extractProcessStages(
 ): ProcessStage[] {
   const stages: ProcessStage[] = [];
   const text = `${subject}\n\n${body}`;
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // Stage patterns: e.g. "PPT — August 14, 2026", "Technical Assessment — August 16, 2026, Sunday, 4:00 PM, Virtual", "Interview — Yet to decide"
-  const stageRegexes = [
+  const stageKeywordMatchers = [
     {
       type: 'ppt' as EventType,
-      regex: /\b(PPT|Pre[- ]Placement\s+Talk|Presentation)\s*(?:—|-|:)\s*([^\n]+)/gi
+      keywordRegex: /\b(PPT|Pre[- ]Placement\s+Talk|Presentation)\b/i
     },
     {
       type: 'assessment' as EventType,
-      regex: /\b(Technical\s+Assessment|Online\s+Assessment|OA\b|Coding\s+Round|Coding\s+Test|Online\s+Test|Aptitude\s+Test|Assessment)\s*(?:—|-|:)\s*([^\n]+)/gi
+      keywordRegex: /\b(Technical\s+Assessment|Online\s+Assessment|OA\b|Coding\s+Round|Coding\s+Test|Online\s+Test|Aptitude\s+Test|Assessment)\b/i
     },
     {
       type: 'interview' as EventType,
-      regex: /\b(Technical\s+Interview|HR\s+Interview|Interview|Discussion\s+Round)\s*(?:—|-|:)\s*([^\n]+)/gi
+      keywordRegex: /\b(Technical\s+Interview|HR\s+Interview|Interview|Discussion\s+Round)\b/i
     },
     {
       type: 'registration' as EventType,
-      regex: /\b(Registration|Registration\s+Deadline|Last\s+Date\s+to\s+Apply|Apply\s+Before)\s*(?:—|-|:)\s*([^\n]+)/gi
+      keywordRegex: /\b(Registration|Registration\s+Deadline|Last\s+Date\s+to\s+Apply|Apply\s+Before)\b/i
     }
   ];
 
-  for (const { type, regex } of stageRegexes) {
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(text)) !== null) {
-      const stageName = match[1].trim();
-      const stageContent = match[2].trim();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
 
-      const isTBD = /\b(yet\s+to\s+decide|tbd|to\s+be\s+decided|to\s+be\s+announced|tba|not\s+decided)\b/i.test(stageContent);
+    for (const { type, keywordRegex } of stageKeywordMatchers) {
+      const match = line.match(keywordRegex);
+      if (match) {
+        const stageName = match[0].trim();
 
-      if (isTBD) {
-        stages.push({
-          name: stageName,
-          type,
-          status: 'tbd',
-          details: 'Yet to decide'
-        });
-      } else {
-        const parsed = parseDateFromEmailText(stageContent, '', emailTimestamp, nowDate);
-        const stageTime = parsed.time || extractTimeFromText(stageContent);
+        // Check if current line has enough information or if table cells are on consecutive lines
+        let contextText = line;
+        if (contextText.split(/\s+/).length <= 3 && i + 1 < lines.length) {
+          contextText = lines.slice(i, i + 5).join(' ');
+        }
 
-        stages.push({
-          name: stageName,
-          type,
-          date: parsed.date,
-          time: stageTime,
-          status: 'scheduled',
-          details: stageContent
-        });
+        const isTBD = /\b(yet\s+to\s+decide|tbd|to\s+be\s+decided|to\s+be\s+announced|tba|not\s+decided)\b/i.test(contextText);
+
+        if (isTBD) {
+          if (!stages.some(s => s.type === type)) {
+            stages.push({
+              name: stageName,
+              type,
+              status: 'tbd',
+              details: 'Yet to decide'
+            });
+          }
+        } else {
+          const parsed = parseDateFromEmailText(contextText, '', emailTimestamp, nowDate);
+          const stageTime = parsed.time || extractTimeFromText(contextText);
+
+          if (parsed.date || stageTime) {
+            if (!stages.some(s => s.type === type && s.date === parsed.date)) {
+              stages.push({
+                name: stageName,
+                type,
+                date: parsed.date,
+                time: stageTime,
+                status: 'scheduled',
+                details: line
+              });
+            }
+          }
+        }
       }
     }
   }
@@ -267,6 +282,16 @@ export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Dat
     }
   }
 
+  // Calculate dynamic status relative to currentNow
+  const status = calculateEventStatus(
+    primaryDate,
+    currentNow,
+    dateResult.endDate,
+    dateResult.isContinuousRange,
+    allDates.length > 0 ? allDates : undefined,
+    stages.length > 0 ? stages : undefined
+  );
+
   // Derive stable deduplication key
   const normTitle = normalizeTitleForDeduplication(cleanTitle);
   const orgKey = (organization || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -304,7 +329,7 @@ export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Dat
       }
     ],
     confidence: 0.95,
-    status: dateResult.status,
+    status,
     schemaVersion: CURRENT_SCHEMA_VERSION,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -364,6 +389,14 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
       combinedDesc = primary.actionDescription;
     } else {
       combinedDesc = secondary.actionDescription;
+    }
+  }
+
+  // Enrich assessment stage if incoming email has action description (e.g. test active window / link share)
+  if (combinedDesc) {
+    const assessmentStage = stageMap.get('assessment') || stageMap.get('coding_round');
+    if (assessmentStage) {
+      assessmentStage.details = combinedDesc;
     }
   }
 

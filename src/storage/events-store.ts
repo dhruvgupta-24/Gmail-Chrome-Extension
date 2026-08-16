@@ -84,7 +84,8 @@ export async function getAllEvents(nowDate: Date = new Date()): Promise<Extracte
       nowDate,
       event.endDate,
       event.isContinuousRange,
-      event.allDates
+      event.allDates,
+      event.stages
     );
     return {
       ...event,

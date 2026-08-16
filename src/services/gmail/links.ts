@@ -335,6 +335,22 @@ export function extractActionLinks(htmlOrText: string): ActionLink[] {
     }
   }
 
+  // Deduplicate results by normalized URL and label
+  const uniqueResults: ActionLink[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const item of results) {
+    const normUrl = item.url.toLowerCase().replace(/\/+$/, '');
+    const normLabel = item.label.toLowerCase();
+    const key = `${normUrl}|${normLabel}`;
+
+    if (!seenKeys.has(key) && !seenKeys.has(normUrl)) {
+      seenKeys.add(key);
+      seenKeys.add(normUrl);
+      uniqueResults.push(item);
+    }
+  }
+
   // Prioritize high-value action links (assessments, registrations, meetings first)
   const priorityOrder: Record<ActionLinkType, number> = {
     assessment: 1,
@@ -345,7 +361,7 @@ export function extractActionLinks(htmlOrText: string): ActionLink[] {
     general: 6
   };
 
-  return results
+  return uniqueResults
     .sort((a, b) => (priorityOrder[a.type || 'general'] || 10) - (priorityOrder[b.type || 'general'] || 10))
     .slice(0, 3); // Return at most top 3 high-value action links
 }

@@ -1,4 +1,4 @@
-import { EventStatus, ExtractedEvent, DateRangeQuery } from '../../types/events';
+import { EventStatus, ExtractedEvent, DateRangeQuery, ProcessStage } from '../../types/events';
 
 export interface ParsedDateResult {
   date?: string; // YYYY-MM-DD (primary/representative event date)
@@ -66,14 +66,21 @@ export function calculateEventStatus(
   nowDate: Date = new Date(),
   endDateStr?: string,
   isContinuousRange?: boolean,
-  allDates?: string[]
+  allDates?: string[],
+  stages?: ProcessStage[]
 ): EventStatus {
   const todayStr = toDateString(nowDate);
   const tomorrowDate = new Date(nowDate);
   tomorrowDate.setDate(tomorrowDate.getDate() + 1);
   const tomorrowStr = toDateString(tomorrowDate);
 
-  // 1. Check discrete dates list
+  // 1. Check process stages
+  if (stages && stages.length > 0) {
+    if (stages.some(s => s.date === todayStr)) return 'today';
+    if (stages.some(s => s.date === tomorrowStr)) return 'tomorrow';
+  }
+
+  // 2. Check discrete dates list
   if (allDates && allDates.length > 0) {
     if (allDates.includes(todayStr)) return 'today';
     if (allDates.includes(tomorrowStr)) return 'tomorrow';
@@ -85,7 +92,7 @@ export function calculateEventStatus(
     if (pastDates.length === allDates.length) return 'past';
   }
 
-  // 2. Check continuous active range (e.g. Aug 15 to Aug 19)
+  // 3. Check continuous active range (e.g. Aug 15 to Aug 19)
   if (isContinuousRange && targetDateStr && endDateStr) {
     if (todayStr >= targetDateStr && todayStr <= endDateStr) return 'today';
     if (tomorrowStr >= targetDateStr && tomorrowStr <= endDateStr) return 'tomorrow';
@@ -93,7 +100,7 @@ export function calculateEventStatus(
     if (endDateStr < todayStr) return 'past';
   }
 
-  // 3. Check single date / deadline (Point in time)
+  // 4. Check single date / deadline (Point in time)
   if (targetDateStr) {
     if (targetDateStr === todayStr) return 'today';
     if (targetDateStr === tomorrowStr) return 'tomorrow';
@@ -679,17 +686,24 @@ export function parseQueryDateRange(query: string, referenceDate: Date = new Dat
  * Deterministically checks if an event's actual date / continuous window / deadline overlaps query date range.
  */
 export function isEventInRange(event: ExtractedEvent, queryStart: string, queryEnd: string): boolean {
-  // 1. Continuous active range (e.g. Aug 15 to Aug 19)
+  // 1. Process stages (e.g. PPT on Aug 14, Assessment on Aug 16)
+  if (event.stages && event.stages.length > 0) {
+    if (event.stages.some(s => s.date && s.date >= queryStart && s.date <= queryEnd)) {
+      return true;
+    }
+  }
+
+  // 2. Continuous active range (e.g. Aug 15 to Aug 19)
   if (event.isContinuousRange && event.startDate && event.endDate) {
     return event.startDate <= queryEnd && event.endDate >= queryStart;
   }
 
-  // 2. Discrete dates list (e.g. 12th, 24th, 25th August)
+  // 3. Discrete dates list (e.g. 12th, 24th, 25th August)
   if (event.allDates && event.allDates.length > 0) {
     return event.allDates.some(d => d >= queryStart && d <= queryEnd);
   }
 
-  // 3. Single point-in-time date or deadline
+  // 4. Single point-in-time date or deadline
   const singleDate = event.date || event.deadline;
   if (singleDate) {
     const dOnly = singleDate.split(' ')[0]; // Strip time if present

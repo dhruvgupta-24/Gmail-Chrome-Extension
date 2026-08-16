@@ -34,7 +34,7 @@ export function decodeBase64Url(base64Url: string): string {
 }
 
 /**
- * Converts HTML body to clean plain text, preserving paragraphs, lists, and link cues.
+ * Converts HTML body to clean plain text, preserving paragraphs, lists, tables, and link cues.
  */
 export function htmlToPlainText(html: string): string {
   if (!html) return '';
@@ -47,7 +47,10 @@ export function htmlToPlainText(html: string): string {
     .replace(/<br\s*[\/]?>/gi, '\n')
     .replace(/<\/p>/gi, '\n\n')
     .replace(/<\/div>/gi, '\n')
+    // Tables: preserve cell and row structure cleanly
+    .replace(/<\/t[dh]>/gi, '\t')
     .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/table>/gi, '\n\n')
     .replace(/<\/li>/gi, '\n')
     .replace(/<li[^>]*>/gi, ' • ')
     // Replace links with text + url annotations if clear
@@ -64,8 +67,9 @@ export function htmlToPlainText(html: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    // Clean whitespace
-    .replace(/[ \t]+/g, ' ')
+    // Clean whitespace while preserving tabs and newlines
+    .replace(/[ \f\v]+/g, ' ')
+    .replace(/\t+/g, '\t')
     .replace(/\n\s*\n/g, '\n\n')
     .trim();
 }

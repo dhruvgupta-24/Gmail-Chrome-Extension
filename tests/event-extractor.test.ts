@@ -4,13 +4,15 @@ import {
   detectActionRequired,
   extractEventFromEmail,
   cleanEventTitle,
-  normalizeTitleForDeduplication
+  normalizeTitleForDeduplication,
+  extractProcessStages
 } from '../src/services/extraction/event-extractor';
 import { deduplicateEvents } from '../src/storage/local-search';
 import { ParsedEmailMessage } from '../src/types/gmail';
 
 describe('Event Extractor & Deduplication', () => {
-  const fixedNow = new Date('2026-08-15T10:00:00Z');
+  const fixedAug15 = new Date('2026-08-15T10:00:00Z');
+  const fixedAug16 = new Date('2026-08-16T10:00:00Z');
 
   it('cleans subject titles by removing Re:, Fwd:, [External] prefixes', () => {
     expect(cleanEventTitle('Re: Re: Campus Detail | Sigmoid OA')).toBe('Campus Detail | Sigmoid OA');
@@ -37,6 +39,38 @@ describe('Event Extractor & Deduplication', () => {
     expect(actionRequired).toBe(true);
     expect(actionDescription).toContain('4 pm - 5:30 pm');
     expect(actionDescription).toContain('3:50PM');
+  });
+
+  it('extracts process stages from real recruitment process table text', () => {
+    const tableText = `
+Process Description\tDate\tDay\tTime\tMode
+PPT\t14-Aug-26\tFriday\t4:30 PM\tVirtual
+Technical Assessment\t16-Aug-26\tSunday\t4:00 PM\tVirtual
+Interview\tYet to Decide\tIn Campus
+    `;
+
+    const stages = extractProcessStages(
+      'Campus Details | Infoedge India Ltd. | 14th & 16th August 2026',
+      tableText,
+      new Date('2026-08-13T08:00:00Z').getTime(),
+      fixedAug16
+    );
+
+    expect(stages.length).toBe(3);
+
+    const pptStage = stages.find(s => s.type === 'ppt');
+    expect(pptStage).toBeDefined();
+    expect(pptStage?.date).toBe('2026-08-14');
+    expect(pptStage?.time).toBe('4:30 PM');
+
+    const assessStage = stages.find(s => s.type === 'assessment');
+    expect(assessStage).toBeDefined();
+    expect(assessStage?.date).toBe('2026-08-16');
+    expect(assessStage?.time).toBe('4:00 PM');
+
+    const interviewStage = stages.find(s => s.type === 'interview');
+    expect(interviewStage).toBeDefined();
+    expect(interviewStage?.status).toBe('tbd');
   });
 
   it('CASE 6: Deduplicates "Destination Dr. Reddy\'s 3.0 is LIVE" and "Fwd: Destination Dr. Reddy\'s 3.0..." into ONE event', () => {
@@ -72,15 +106,15 @@ describe('Event Extractor & Deduplication', () => {
       labels: ['INBOX']
     };
 
-    const ev1 = extractEventFromEmail(email1, fixedNow)!;
-    const ev2 = extractEventFromEmail(email2, fixedNow)!;
+    const ev1 = extractEventFromEmail(email1, fixedAug15)!;
+    const ev2 = extractEventFromEmail(email2, fixedAug15)!;
 
     const deduped = deduplicateEvents([ev1, ev2]);
     expect(deduped.length).toBe(1);
     expect(deduped[0].sourceMessages.length).toBe(2);
   });
 
-  it('TEST G & Process Merging: Merges Infoedge initial process email and subsequent timing update email into one rich event', () => {
+  it('TEST G & Real Gmail Data: Extracts table schedule, merges update email, and sets status to TODAY on Aug 16', () => {
     const email1: ParsedEmailMessage = {
       id: 'msg-info1',
       threadId: 'th-infoedge',
@@ -92,7 +126,12 @@ describe('Event Extractor & Deduplication', () => {
       date: '2026-08-13T08:00:00Z',
       timestamp: new Date('2026-08-13T08:00:00Z').getTime(),
       snippet: 'Infoedge hiring process schedule',
-      plainText: 'Process: PPT — Aug 14, Technical Assessment — Aug 16, Sunday, 4:00 PM',
+      plainText: `
+Process Description\tDate\tDay\tTime\tMode
+PPT\t14-Aug-26\tFriday\t4:30 PM\tVirtual
+Technical Assessment\t16-Aug-26\tSunday\t4:00 PM\tVirtual
+Interview\tYet to Decide\tIn Campus
+      `,
       links: [],
       labels: ['INBOX']
     };
@@ -108,22 +147,27 @@ describe('Event Extractor & Deduplication', () => {
       date: '2026-08-15T08:00:00Z',
       timestamp: new Date('2026-08-15T08:00:00Z').getTime(),
       snippet: 'Important test instructions for Infoedge',
-      plainText: 'Test will be active between 4 pm - 5:30 pm. Link will be shared by 3:50PM. Link: https://assessment.infoedge.com',
+      plainText: 'Please find the list of eligible students. Test will be active between 4 pm - 5:30 pm. Link will be shared by 3:50PM. Link: https://assessment.infoedge.com',
       links: [{ text: 'Assessment Portal', href: 'https://assessment.infoedge.com' }],
       labels: ['INBOX']
     };
 
-    const ev1 = extractEventFromEmail(email1, fixedNow)!;
-    const ev2 = extractEventFromEmail(email2, fixedNow)!;
+    const ev1 = extractEventFromEmail(email1, fixedAug16)!;
+    expect(ev1).toBeDefined();
+    expect(ev1.status).toBe('today'); // On August 16, Technical Assessment is today!
+
+    const ev2 = extractEventFromEmail(email2, fixedAug16)!;
 
     const deduped = deduplicateEvents([ev1, ev2]);
     expect(deduped.length).toBe(1);
 
     const merged = deduped[0];
     expect(merged.company).toBe('Infoedge India Ltd.');
+    expect(merged.status).toBe('today');
     expect(merged.sourceMessages.length).toBe(2);
     expect(merged.actionDescription).toContain('4 pm - 5:30 pm');
     expect(merged.actionDescription).toContain('3:50PM');
+    expect(merged.stages?.length).toBe(3);
     expect(merged.links.some(l => l.url.includes('assessment.infoedge.com'))).toBe(true);
   });
 });
