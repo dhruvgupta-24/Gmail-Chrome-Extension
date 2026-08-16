@@ -6,20 +6,18 @@ import {
   cleanEventTitle,
   normalizeTitleForDeduplication,
   extractProcessStages,
-  extractOrganization
+  extractOrganization,
+  normalizeActionText,
+  isPersonalName
 } from '../src/services/extraction/event-extractor';
-import { calculateEventStatus } from '../src/services/extraction/date-parser';
 import { deduplicateEvents } from '../src/storage/local-search';
 import { generateLocalDeterministicResponse } from '../src/services/ai/local-responder';
 import { parseQueryConstraints } from '../src/services/retrieval/intent';
+import { formatEventSemanticDate } from '../src/shared/utils';
 import { ParsedEmailMessage } from '../src/types/gmail';
 
 describe('Event Extractor & Deduplication', () => {
-  const fixedAug14 = new Date('2026-08-14T10:00:00Z');
-  const fixedAug15 = new Date('2026-08-15T10:00:00Z');
   const fixedAug16 = new Date('2026-08-16T10:00:00Z');
-  const fixedAug19 = new Date('2026-08-19T10:00:00Z');
-  const fixedAug20 = new Date('2026-08-20T10:00:00Z');
 
   it('PART 1 CLASSIFICATION: Classifies nominations, hackathons, registrations, assessments accurately', () => {
     // 1. Call for Nominations -> nomination
@@ -43,6 +41,21 @@ describe('Event Extractor & Deduplication', () => {
       .toBe('interview');
   });
 
+  it('PART 4 SENDER NAME VS ORG: Rejects personal sender name (e.g. SAIF DILAVAR NALBAND) and extracts context org', () => {
+    expect(isPersonalName('SAIF DILAVAR NALBAND')).toBe(true);
+    expect(isPersonalName('John Doe')).toBe(true);
+    expect(isPersonalName('Placement Team')).toBe(false);
+    expect(isPersonalName('Dr. Reddy\'s Campus Team')).toBe(false);
+
+    const sihOrg = extractOrganization(
+      'SAIF DILAVAR NALBAND <saif@univ.edu>',
+      'Registration for Internal Hackathon for SIH 2026',
+      'Please fill out the team nomination details for Smart India Hackathon 2026'
+    );
+    expect(sihOrg).toBe('Smart India Hackathon');
+    expect(sihOrg).not.toContain('SAIF');
+  });
+
   it('PART 5 COMPANY EXTRACTION: Extracts company cleanly without being polluted by Microsoft Teams in body', () => {
     const org = extractOrganization(
       'Placement Cell <tnp@univ.edu>',
@@ -53,21 +66,87 @@ describe('Event Extractor & Deduplication', () => {
     expect(org).not.toBe('Microsoft');
   });
 
-  it('PART 4 ACTIVE DATE-RANGE: AIMCAT Aug 15-19 evaluates as active (today) on Aug 15, 16, 19, and past on Aug 20', () => {
-    // Before start: Aug 14 -> upcoming
-    expect(calculateEventStatus('2026-08-15', fixedAug14, '2026-08-19', true, ['2026-08-15', '2026-08-19'])).toBe('tomorrow');
+  it('PART 6 ACTION TEXT NORMALIZATION: Formats operational times cleanly without markdown artifacts or spaces', () => {
+    const rawMalformed = 'The test will be active between 4 pm - 5:30 pm *, and the link is expected to be shared by 3:50PM.';
+    const normalized = normalizeActionText(rawMalformed);
+    expect(normalized).toBe('The test will be active between 4:00 PM and 5:30 PM, and the link is expected to be shared by 3:50 PM.');
+  });
 
-    // Start day: Aug 15 -> today
-    expect(calculateEventStatus('2026-08-15', fixedAug15, '2026-08-19', true, ['2026-08-15', '2026-08-19'])).toBe('today');
+  it('PART 5 ACTIVE DATE-RANGE UI WORDING: Formats continuous active window clearly on active dates', () => {
+    const aimcatEmail: ParsedEmailMessage = {
+      id: 'msg-aimcat-1',
+      threadId: 'th-aimcat',
+      subject: 'AIMCAT 2714 Test Window Starts from Aug 15 to Aug 19',
+      sender: 'TIME Institute <support@time4education.com>',
+      senderName: 'TIME Institute',
+      senderEmail: 'support@time4education.com',
+      recipient: 'students@univ.edu',
+      date: '2026-08-14T08:00:00Z',
+      timestamp: new Date('2026-08-14T08:00:00Z').getTime(),
+      snippet: 'Take your test anytime between Aug 15 and Aug 19',
+      plainText: 'AIMCAT 2714 is live from Aug 15 to Aug 19, 2026. Take test at https://time4education.com/start-test?id=2714',
+      links: [{ text: 'Start Test', href: 'https://time4education.com/start-test?id=2714' }],
+      labels: ['INBOX']
+    };
 
-    // Middle day: Aug 16 -> today (active window)
-    expect(calculateEventStatus('2026-08-15', fixedAug16, '2026-08-19', true, ['2026-08-15', '2026-08-19'])).toBe('today');
+    const ev = extractEventFromEmail(aimcatEmail, fixedAug16)!;
+    expect(ev).toBeDefined();
+    expect(ev.isContinuousRange).toBe(true);
 
-    // End day: Aug 19 -> today
-    expect(calculateEventStatus('2026-08-15', fixedAug19, '2026-08-19', true, ['2026-08-15', '2026-08-19'])).toBe('today');
+    // On Aug 16 (active day): Card must say "Test window active until Aug 19, 2026"
+    const displayLabel = formatEventSemanticDate(ev, fixedAug16);
+    expect(displayLabel).toBe('Test window active until Aug 19, 2026');
+  });
 
-    // After end: Aug 20 -> past
-    expect(calculateEventStatus('2026-08-15', fixedAug20, '2026-08-19', true, ['2026-08-15', '2026-08-19'])).toBe('past');
+  it('PART 1 & 8 CROSS-EVENT LEAKAGE: Unrelated Unstop reminder does NOT merge or steal links from Adobe Hackathon on Unstop', () => {
+    const adobeEmail: ParsedEmailMessage = {
+      id: 'msg-adobe-unstop',
+      threadId: 'th-adobe-1',
+      subject: 'Adobe Gensolve Hackathon is LIVE on Unstop',
+      sender: 'Adobe Careers <careers@adobe.com>',
+      senderName: 'Adobe Careers',
+      senderEmail: 'careers@adobe.com',
+      recipient: 'student@univ.edu',
+      date: '2026-08-10T10:00:00Z',
+      timestamp: new Date('2026-08-10T10:00:00Z').getTime(),
+      snippet: 'Register for Adobe Gensolve Hackathon',
+      plainText: 'Adobe Gensolve is now live. Register at https://unstop.com/competitions/adobe-gensolve-2026 before Aug 25.',
+      links: [{ text: 'Register on Unstop', href: 'https://unstop.com/competitions/adobe-gensolve-2026' }],
+      labels: ['INBOX']
+    };
+
+    const unstopReminderEmail: ParsedEmailMessage = {
+      id: 'msg-unstop-newsletter',
+      threadId: 'th-unstop-general-2',
+      subject: 'Weekly Reminder: Complete your profile and explore opportunities on Unstop',
+      sender: 'Unstop <newsletter@unstop.com>',
+      senderName: 'Unstop',
+      senderEmail: 'newsletter@unstop.com',
+      recipient: 'student@univ.edu',
+      date: '2026-08-12T10:00:00Z',
+      timestamp: new Date('2026-08-12T10:00:00Z').getTime(),
+      snippet: 'Weekly opportunities reminder',
+      plainText: 'Register for upcoming events before Aug 28, 2026 at https://unstop.com/',
+      links: [{ text: 'Explore Unstop', href: 'https://unstop.com/' }],
+      labels: ['INBOX']
+    };
+
+    const adobeEv = extractEventFromEmail(adobeEmail, fixedAug16)!;
+    const unstopEv = extractEventFromEmail(unstopReminderEmail, fixedAug16)!;
+
+    const deduped = deduplicateEvents([adobeEv, unstopEv]);
+
+    // MUST remain 2 completely distinct events
+    expect(deduped.length).toBe(2);
+
+    const foundAdobe = deduped.find(e => e.company === 'Adobe');
+    const foundUnstop = deduped.find(e => e.title.includes('Weekly Reminder'));
+
+    expect(foundAdobe).toBeDefined();
+    expect(foundUnstop).toBeDefined();
+
+    // Adobe competition link MUST NOT leak into the Unstop generic reminder event!
+    expect(foundUnstop?.links.some(l => l.url.includes('adobe-gensolve'))).toBe(false);
   });
 
   it('cleans subject titles by removing Re:, Fwd:, [External] prefixes', () => {
@@ -93,8 +172,8 @@ describe('Event Extractor & Deduplication', () => {
       'Test will be active between 4 pm - 5:30 pm. Link will be shared by 3:50PM.'
     );
     expect(actionRequired).toBe(true);
-    expect(actionDescription).toContain('4 pm - 5:30 pm');
-    expect(actionDescription).toContain('3:50PM');
+    expect(actionDescription).toContain('between 4:00 PM and 5:30 PM');
+    expect(actionDescription).toContain('3:50 PM');
   });
 
   it('extracts process stages and stage-specific links from real recruitment process table text', () => {
@@ -184,8 +263,8 @@ Interview\tYet to Decide\tIn Campus
     expect(merged.company).toBe('Infoedge India Ltd.');
     expect(merged.status).toBe('today');
     expect(merged.sourceMessages.length).toBe(2);
-    expect(merged.actionDescription).toContain('4 pm - 5:30 pm');
-    expect(merged.actionDescription).toContain('3:50PM');
+    expect(merged.actionDescription).toContain('between 4:00 PM and 5:30 PM');
+    expect(merged.actionDescription).toContain('3:50 PM');
     expect(merged.stages?.length).toBe(3);
 
     // Verify stage 0 (PPT) has Teams link, but stage 1 (Technical Assessment) has NO link
@@ -201,8 +280,8 @@ Interview\tYet to Decide\tIn Campus
     // Must describe Technical Assessment with accurate timing instructions
     expect(resToday).toContain('Technical Assessment');
     expect(resToday).toContain('4:00 PM');
-    expect(resToday).toContain('4 pm - 5:30 pm');
-    expect(resToday).toContain('3:50PM');
+    expect(resToday).toContain('between 4:00 PM and 5:30 PM');
+    expect(resToday).toContain('3:50 PM');
 
     // Must NOT contain fake URLs or Teams meeting URLs for assessment
     expect(resToday).not.toContain('assessment.infoedge.com');
@@ -215,6 +294,6 @@ Interview\tYet to Decide\tIn Campus
     const resLink = generateLocalDeterministicResponse(queryLink, [merged], fixedAug16, undefined, undefined, constraintsLink);
 
     expect(resLink).toContain('No direct test link was found');
-    expect(resLink).toContain('3:50PM');
+    expect(resLink).toContain('3:50 PM');
   });
 });

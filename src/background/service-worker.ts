@@ -8,7 +8,7 @@ import { AIProvider } from '../services/ai/provider';
 import { searchLocalDatabase } from '../storage/local-search';
 import { generateLocalDeterministicResponse } from '../services/ai/local-responder';
 import { analyzeIntent } from '../services/retrieval/intent';
-import { extractEventFromEmail } from '../services/extraction/event-extractor';
+import { extractEventFromEmail, cleanEventTitle, normalizeTitleForDeduplication } from '../services/extraction/event-extractor';
 import { getDatabase } from '../storage/database';
 import { saveEvents, getBriefingEvents, getAllEvents, clearAllEvents } from '../storage/events-store';
 import { getSettings, saveSettings } from '../storage/settings-store';
@@ -138,26 +138,40 @@ async function handleMessage(req: ExtensionRequest): Promise<any> {
         );
       }
 
-      // Step 4: Extract source references for 100% traceability
-      const sourceMap = new Map<string, any>();
+      // Step 4: Extract source references with intelligent deduplication (1 per thread/event)
+      const threadSourceMap = new Map<string, any>();
       for (const ev of relevantEvents) {
         for (const src of ev.sourceMessages) {
-          sourceMap.set(src.messageId, src);
+          const key = src.threadId ? `th_${src.threadId}` : normalizeTitleForDeduplication(src.subject);
+          const cleanSub = cleanEventTitle(src.subject);
+          if (!threadSourceMap.has(key)) {
+            threadSourceMap.set(key, {
+              messageId: src.messageId,
+              threadId: src.threadId,
+              subject: cleanSub,
+              sender: src.sender,
+              receivedAt: src.receivedAt
+            });
+          }
         }
       }
       for (const em of contextEmails) {
-        sourceMap.set(em.id, {
-          messageId: em.id,
-          threadId: em.threadId,
-          subject: em.subject,
-          sender: em.sender,
-          receivedAt: em.date
-        });
+        const key = em.threadId ? `th_${em.threadId}` : normalizeTitleForDeduplication(em.subject);
+        const cleanSub = cleanEventTitle(em.subject);
+        if (!threadSourceMap.has(key)) {
+          threadSourceMap.set(key, {
+            messageId: em.id,
+            threadId: em.threadId,
+            subject: cleanSub,
+            sender: em.sender,
+            receivedAt: em.date
+          });
+        }
       }
 
       return {
         content: finalContent,
-        sourceMessages: Array.from(sourceMap.values()).slice(0, 5),
+        sourceMessages: Array.from(threadSourceMap.values()).slice(0, 5),
         usedAI
       };
     }

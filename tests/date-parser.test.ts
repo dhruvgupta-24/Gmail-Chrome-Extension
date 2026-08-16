@@ -119,7 +119,7 @@ describe('Date & Relative Time Parser with Context Scoring', () => {
       createdAt: '',
       updatedAt: ''
     };
-    expect(formatEventSemanticDate(aimcatEvent)).toContain('Test window: Aug 15 to Aug 19, 2026');
+    expect(formatEventSemanticDate(aimcatEvent, new Date('2026-08-16T10:00:00Z'))).toContain('Test window active until Aug 19, 2026');
 
     const idfcEvent: ExtractedEvent = {
       id: 'ev-idfc',

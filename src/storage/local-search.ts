@@ -18,8 +18,16 @@ export interface LocalSearchResult {
 }
 
 /**
+ * Generic platform or aggregator keywords that should never be used on their own as proof of event identity.
+ */
+const GENERIC_PLATFORMS = new Set(['', 'general', 'unstop', 'hackerrank', 'hackerearth', 'mettl', 'wheebox', 'forms', 'googleforms', 'gmail', 'mail', 'placement', 'placements', 'tnp']);
+
+/**
  * Deduplicates events across threads, forwarded copies, and multiple announcement messages.
- * Matches by threadId, normalized title + organization, or normalized title + date.
+ * Strict provenance rules:
+ * - Same threadId merges.
+ * - Same non-generic organization + exact/high-similarity title merges.
+ * - Different companies, generic aggregators (e.g. Unstop vs Adobe on Unstop), or different titles remain strictly isolated.
  */
 export function deduplicateEvents(events: ExtractedEvent[]): ExtractedEvent[] {
   const byKey = new Map<string, ExtractedEvent>();
@@ -29,28 +37,33 @@ export function deduplicateEvents(events: ExtractedEvent[]): ExtractedEvent[] {
     const org = (ev.company || ev.organization || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const dateKey = ev.date || ev.startDate || 'any';
 
-    // 1. Thread Key
+    // 1. Thread Key (highest confidence provenance)
     const threadKey = ev.threadId ? `th_${ev.threadId}` : '';
 
-    // 2. Semantic Content Key (Organization + Normalized Title)
-    const contentKey = `content_${org}_${normTitle}`;
+    // 2. Semantic Content Key (Non-generic Organization + Normalized Title)
+    const isSpecificOrg = !GENERIC_PLATFORMS.has(org);
+    const contentKey = isSpecificOrg ? `content_${org}_${normTitle}` : `content_unique_${ev.id || normTitle}_${dateKey}`;
 
-    // Check if an event already exists with this threadKey or contentKey
     let matchedKey: string | null = null;
     if (threadKey && byKey.has(threadKey)) {
       matchedKey = threadKey;
-    } else if (byKey.has(contentKey)) {
+    } else if (isSpecificOrg && byKey.has(contentKey)) {
       matchedKey = contentKey;
     } else {
-      // Check for partial title overlap if titles are long
+      // Check for exact matching titles across forwarded copies
       for (const [k, existing] of byKey.entries()) {
         const existingNorm = normalizeTitleForDeduplication(existing.title);
         const existingOrg = (existing.company || existing.organization || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const existingIsSpecific = !GENERIC_PLATFORMS.has(existingOrg);
 
-        if (
-          (org && existingOrg && org === existingOrg && (normTitle.includes(existingNorm) || existingNorm.includes(normTitle))) ||
-          (normTitle.length > 15 && normTitle === existingNorm)
-        ) {
+        // Same specific company AND matching title
+        if (isSpecificOrg && existingIsSpecific && org === existingOrg && (normTitle === existingNorm)) {
+          matchedKey = k;
+          break;
+        }
+
+        // Exact long title match (e.g. identical forwarded university circulars with same date)
+        if (normTitle.length > 20 && normTitle === existingNorm && (ev.date === existing.date || !ev.date || !existing.date)) {
           matchedKey = k;
           break;
         }
@@ -62,7 +75,7 @@ export function deduplicateEvents(events: ExtractedEvent[]): ExtractedEvent[] {
       const merged = mergeEvents(existing, ev);
       byKey.set(matchedKey, merged);
     } else {
-      const keyToUse = threadKey || contentKey || `ev_${normTitle}_${dateKey}`;
+      const keyToUse = threadKey || contentKey || `ev_${normTitle}_${dateKey}_${Math.random().toString(36).slice(2, 6)}`;
       byKey.set(keyToUse, ev);
     }
   }

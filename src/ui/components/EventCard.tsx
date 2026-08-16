@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ExtractedEvent, ActionLink } from '../../types/events';
 import { formatEventSemanticDate, openGmailMessageInCurrentTab, getTodayDateString } from '../../shared/utils';
 import { getBestActionLinkForStage } from '../../services/ai/local-responder';
-import { deduplicateActionLinks } from '../../services/gmail/links';
+import { filterActionLinksForEventType } from '../../services/gmail/links';
 import {
   ExternalLink,
   Mail,
@@ -90,21 +90,20 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
     }
   };
 
-  // Filter links specifically relevant to the active stage (excluding meeting links on assessment stages!)
+  // Filter links specifically relevant to the active stage or event type (excluding meeting links on assessment stages!)
   const actionableLinks = React.useMemo(() => {
     const rawLinks = event.links || [];
-    const filtered: ActionLink[] = [];
 
     if (activeStage) {
       const best = getBestActionLinkForStage(activeStage.type, activeStage.links, rawLinks);
       if (best) {
-        filtered.push(best);
+        return [best];
       }
-    } else {
-      return deduplicateActionLinks(rawLinks);
+      return [];
     }
-    return filtered;
-  }, [event.links, activeStage]);
+
+    return filterActionLinksForEventType(displayType, rawLinks);
+  }, [event.links, activeStage, displayType]);
 
   const primarySource = event.sourceMessages[0];
 

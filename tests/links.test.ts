@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeUrl, classifyLinkType, extractActionLinks, unwrapRedirectUrl, deduplicateActionLinks } from '../src/services/gmail/links';
+import {
+  sanitizeUrl,
+  classifyLinkType,
+  extractActionLinks,
+  unwrapRedirectUrl,
+  deduplicateActionLinks,
+  filterActionLinksForEventType
+} from '../src/services/gmail/links';
 import { ActionLink } from '../src/types/events';
 
 describe('Link Extractor, Unwrapper and Semantic Deduplication', () => {
@@ -35,6 +42,17 @@ describe('Link Extractor, Unwrapper and Semantic Deduplication', () => {
     expect(deduped.filter(l => l.label === 'Open Registration Form').length).toBe(1);
   });
 
+  it('DEDUPLICATION: Suppresses generic root homepage (unstop.com) when a specific deep-link exists', () => {
+    const mixedUnstop: ActionLink[] = [
+      { label: 'Register on Unstop', url: 'https://unstop.com/competitions/adobe-hackathon-2026', type: 'registration' },
+      { label: 'Unstop', url: 'https://unstop.com/', type: 'general' }
+    ];
+
+    const deduped = deduplicateActionLinks(mixedUnstop);
+    expect(deduped.length).toBe(1);
+    expect(deduped[0].url).toBe('https://unstop.com/competitions/adobe-hackathon-2026');
+  });
+
   it('DEDUPLICATION: Preserves genuinely distinct actions on the same event', () => {
     const mixedLinks: ActionLink[] = [
       { label: 'Apply', url: 'https://drreddys.com/apply', type: 'registration' },
@@ -47,6 +65,24 @@ describe('Link Extractor, Unwrapper and Semantic Deduplication', () => {
     expect(deduped.some(l => l.label === 'Apply')).toBe(true);
     expect(deduped.some(l => l.label === 'Join Teams')).toBe(true);
     expect(deduped.some(l => l.label === 'Download Admit Card')).toBe(true);
+  });
+
+  it('STAGE-AWARE ISOLATION: Coding rounds strictly reject Teams/Zoom meeting links (fixing BNP Paribas)', () => {
+    const rawLinks: ActionLink[] = [
+      { label: 'Apply Now', url: 'https://bnpparibas.com/careers/apply', type: 'registration' },
+      { label: 'Join Teams Meeting', url: 'https://teams.microsoft.com/l/meetup-join/briefing', type: 'meeting' }
+    ];
+
+    const filteredForCoding = filterActionLinksForEventType('coding_round', rawLinks);
+    // Must contain registration/portal link, MUST NOT contain Teams link!
+    expect(filteredForCoding.length).toBe(1);
+    expect(filteredForCoding[0].url).toContain('bnpparibas.com');
+    expect(filteredForCoding.some(l => l.url.includes('teams.microsoft.com'))).toBe(false);
+
+    // For PPT, must prefer Teams meeting link
+    const filteredForPPT = filterActionLinksForEventType('ppt', rawLinks);
+    expect(filteredForPPT.length).toBe(1);
+    expect(filteredForPPT[0].url).toContain('teams.microsoft.com');
   });
 
   it('TEST 6: Classifies assessment and test platforms', () => {

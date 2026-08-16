@@ -82,16 +82,17 @@ export function formatHumanDate(
 /**
  * Returns a complete semantic description of the event's date/schedule for cards.
  */
-export function formatEventSemanticDate(event: ExtractedEvent): string {
+export function formatEventSemanticDate(event: ExtractedEvent, referenceDate: Date = new Date()): string {
   const formatIsoDateClean = (iso: string) => {
     const parts = iso.split('-').map(Number);
     if (!parts[0] || !parts[1] || !parts[2]) return iso;
     return `${MONTH_NAMES[parts[1] - 1]} ${parts[2]}, ${parts[0]}`;
   };
 
+  const todayStr = getTodayDateString(referenceDate);
+
   // 1. Process stages (e.g. PPT on Aug 14, Technical Assessment on Aug 16 at 4:00 PM)
   if (event.stages && event.stages.length > 0) {
-    const todayStr = getTodayDateString();
     const activeTodayStage = event.stages.find(s => s.date === todayStr);
     if (activeTodayStage) {
       return `Today: ${activeTodayStage.name}${activeTodayStage.time ? ` at ${activeTodayStage.time}` : ''}`;
@@ -102,18 +103,27 @@ export function formatEventSemanticDate(event: ExtractedEvent): string {
     }
   }
 
-  // 2. Point-in-time deadline
+  // 2. Continuous active range (e.g. AIMCAT Aug 15 to Aug 19)
+  if (event.isContinuousRange && event.startDate && event.endDate) {
+    const isTest = event.type === 'assessment' || event.type === 'coding_round' || /test|assessment|aimcat|exam/i.test(event.title);
+    const windowName = isTest ? 'Test window' : (event.type === 'registration' ? 'Registration window' : 'Window');
+
+    if (todayStr >= event.startDate && todayStr <= event.endDate) {
+      return `${windowName} active until ${formatIsoDateClean(event.endDate)}`;
+    }
+    if (todayStr < event.startDate) {
+      return `${windowName} opens ${formatIsoDateClean(event.startDate)} (until ${formatIsoDateClean(event.endDate)})`;
+    }
+    return `${windowName} ended on ${formatIsoDateClean(event.endDate)}`;
+  }
+
+  // 3. Point-in-time deadline
   if (event.isDeadline || event.deadline) {
     const rawDate = (event.deadline || event.date || '').split(' ')[0];
     const dateStr = formatIsoDateClean(rawDate);
     const timeStr = event.time ? ` at ${event.time}` : '';
     const isReg = event.type === 'registration' || event.title.toLowerCase().includes('register');
     return `${isReg ? 'Registration Deadline' : 'Deadline'}: ${dateStr}${timeStr}`;
-  }
-
-  // 3. Continuous window
-  if (event.isContinuousRange && event.startDate && event.endDate) {
-    return `Test window: ${formatHumanDate(event.startDate, undefined, event.endDate, true)}`;
   }
 
   // 4. Discrete multi-dates list
@@ -125,7 +135,7 @@ export function formatEventSemanticDate(event: ExtractedEvent): string {
     return `Dates: ${formatted}`;
   }
 
-  // 4. Single scheduled event
+  // 5. Single scheduled event
   const singleDate = event.date || event.startDate;
   if (singleDate) {
     const dateFormatted = formatIsoDateClean(singleDate);

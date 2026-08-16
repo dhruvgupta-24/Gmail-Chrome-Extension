@@ -250,10 +250,11 @@ function extractCandidatesFromSection(
     }
   }
 
-  // 2. Continuous Date Range (e.g. "15-Aug-2026 to 19-Aug-2026", "from 15th August to 19th August 2026")
+  // 2. Continuous Date Range (e.g. "15-Aug-2026 to 19-Aug-2026", "from 15th August to 19th August 2026", "Aug 15 to Aug 19, 2026")
   const continuousRegexes = [
     /\b(?:from\s+)?(\d{1,2})[-/]([a-z]{3}|\d{1,2})[-/](\d{2,4})\s*(?:to|-|until|through)\s*(\d{1,2})[-/]([a-z]{3}|\d{1,2})[-/](\d{2,4})\b/gi,
-    /\b(?:from\s+)?(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(?:to|-|until|through)\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/gi
+    /\b(?:from\s+)?(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(?:to|-|until|through)\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/gi,
+    /\b(?:from\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\s*(?:to|-|–|until|through)\s*(?:(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+)?(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/gi
   ];
 
   for (const regex of continuousRegexes) {
@@ -262,7 +263,7 @@ function extractCandidatesFromSection(
       let sISO: string | null = null;
       let eISO: string | null = null;
 
-      if (match.length >= 7 && match[6]) {
+      if (match.length >= 7 && match[6] && !isNaN(Number(match[3]))) {
         // Formatted 15-Aug-2026 to 19-Aug-2026
         const d1 = parseInt(match[1], 10);
         const m1 = isNaN(Number(match[2])) ? parseMonth(match[2]) : parseInt(match[2], 10) - 1;
@@ -278,8 +279,20 @@ function extractCandidatesFromSection(
           sISO = toISO(y1, m1, d1);
           eISO = toISO(y2, m2, d2);
         }
+      } else if (match[1] && isNaN(Number(match[1]))) {
+        // Month First: Aug 15 to Aug 19, 2026 or Aug 15 to 19, 2026
+        const m1 = parseMonth(match[1]);
+        const d1 = parseInt(match[2], 10);
+        const m2 = match[3] ? parseMonth(match[3]) : m1;
+        const d2 = parseInt(match[4], 10);
+        const y = match[5] ? parseInt(match[5], 10) : refYear;
+
+        if (m1 !== undefined && m2 !== undefined && d1 >= 1 && d1 <= 31 && d2 >= 1 && d2 <= 31) {
+          sISO = toISO(y, m1, d1);
+          eISO = toISO(y, m2, d2);
+        }
       } else {
-        // Worded 15th August to 19th August
+        // Worded 15th August to 19th August 2026
         const d1 = parseInt(match[1], 10);
         const m1 = parseMonth(match[2]);
         const d2 = parseInt(match[3], 10);

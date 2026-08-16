@@ -3,7 +3,7 @@ import { ParsedEmailMessage } from '../../types/gmail';
 import { parseDateFromEmailText, extractTimeFromText, calculateEventStatus } from './date-parser';
 import { extractActionLinks, deduplicateActionLinks } from '../gmail/links';
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 /**
  * Strips email reply/forward prefixes, tags, and extraneous whitespace to produce a clean display title.
@@ -126,6 +126,60 @@ export function detectEventType(subject: string, body: string = ''): EventType {
 }
 
 /**
+ * Normalizes time string into standard format e.g. "4:00 PM" or "5:30 PM".
+ */
+function standardizeTimeString(raw: string): string {
+  const clean = raw.trim().replace(/\*/g, '').trim();
+  const match = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (!match) return clean;
+
+  const hours = match[1];
+  const minutes = match[2] || '00';
+  const period = (match[3] || '').toUpperCase();
+
+  return period ? `${hours}:${minutes} ${period}` : `${hours}:${minutes}`;
+}
+
+/**
+ * Normalizes operational action text, fixing punctuation, markdown artifacts, and time spacing.
+ */
+export function normalizeActionText(text: string): string {
+  if (!text) return '';
+
+  let clean = text
+    // Strip markdown artifacts e.g. *, _, ~, #, \
+    .replace(/[*_~#\\]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Normalize time ranges: "between 4 pm - 5:30 pm" -> "between 4:00 PM and 5:30 PM"
+  clean = clean.replace(
+    /\b(?:between|from)?\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:-|–|to|and)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/gi,
+    (_match, t1, t2) => {
+      const formatted1 = standardizeTimeString(t1);
+      const formatted2 = standardizeTimeString(t2);
+      return `between ${formatted1} and ${formatted2}`;
+    }
+  );
+
+  // Normalize single time targets: "by 3:50PM" -> "by 3:50 PM"
+  clean = clean.replace(
+    /\bby\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/gi,
+    (_match, t) => `by ${standardizeTimeString(t)}`
+  );
+
+  // Clean spaces before punctuation
+  clean = clean.replace(/\s+,/g, ',').replace(/\s+\./g, '.');
+
+  // Ensure trailing period
+  if (clean && !/[.!?]$/.test(clean)) {
+    clean = `${clean}.`;
+  }
+
+  return clean;
+}
+
+/**
  * Detects if action is required from the recipient and extracts operational details.
  */
 export function detectActionRequired(subject: string, body: string): { actionRequired: boolean; actionDescription?: string } {
@@ -140,14 +194,19 @@ export function detectActionRequired(subject: string, body: string): { actionReq
   if (activeWindowMatch || linkShareMatch) {
     const parts: string[] = [];
     if (activeWindowMatch) {
-      parts.push(`The test will be active ${activeWindowMatch[1].trim()}`);
+      const rawWindow = activeWindowMatch[1].trim().replace(/\*/g, '').trim();
+      const normWindow = normalizeActionText(`active ${rawWindow}`).replace(/\.$/, '');
+      parts.push(`The test will be ${normWindow}`);
     }
     if (linkShareMatch) {
-      parts.push(`the link is expected to be shared by ${linkShareMatch[1].trim()}`);
+      const rawShare = linkShareMatch[1].trim().replace(/\*/g, '').trim();
+      const normShare = standardizeTimeString(rawShare);
+      parts.push(`the link is expected to be shared by ${normShare}`);
     }
+    const rawResult = `${parts.join(', and ')}.`;
     return {
       actionRequired: true,
-      actionDescription: `${parts.join(', and ')}.`
+      actionDescription: normalizeActionText(rawResult)
     };
   }
 
@@ -175,16 +234,39 @@ export function detectActionRequired(subject: string, body: string): { actionReq
 }
 
 /**
+ * Checks if a string is a personal individual name (e.g. "SAIF DILAVAR NALBAND", "John Doe").
+ */
+export function isPersonalName(name: string): boolean {
+  if (!name) return false;
+  const clean = name.trim();
+
+  // Known organization keywords that indicate this is NOT a personal name
+  const orgKeywords = /\b(team|cell|office|university|college|department|centre|center|institute|club|committee|board|society|authority|academy|portal|hr|placement|placements|tnp|admin|support|desk|services|labs|foundation|education|careers|corp|corporation|inc|ltd|pvt|bank|technologies|solutions)\b/i;
+  if (orgKeywords.test(clean)) {
+    return false;
+  }
+
+  // Standard personal names: 2 to 4 capitalized words of letters/dots without org keywords
+  const words = clean.split(/\s+/);
+  if (words.length >= 2 && words.length <= 4 && words.every(w => /^[A-Z][a-zA-Z.'-]*$/.test(w) || /^[A-Z]+$/.test(w))) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Extracts organization or company generically from subject structure, sender, and content.
  */
-export function extractOrganization(senderName: string, subject: string, _body: string = ''): string {
+export function extractOrganization(senderName: string, subject: string, body: string = ''): string {
   const cleanSub = cleanEventTitle(subject);
+  const combined = `${cleanSub} ${body}`;
 
   // 1. Structured subject delimiters: "Campus Details | <Company> | ..." or "Campus Drive: <Company>"
   const pipeMatch = cleanSub.match(/^(?:campus\s+details?|campus\s+drive|recruitment\s+drive|placement\s+details?)\s*\|\s*([^|]+?)(?:\s*\||$)/i);
   if (pipeMatch && pipeMatch[1]) {
     const org = pipeMatch[1].trim();
-    if (org && !/^\d/.test(org) && org.length > 1) {
+    if (org && !/^\d/.test(org) && org.length > 1 && !/^(microsoft\s+teams|google|zoom)$/i.test(org)) {
       return org;
     }
   }
@@ -192,7 +274,7 @@ export function extractOrganization(senderName: string, subject: string, _body: 
   const bracketMatch = cleanSub.match(/^\[([^\]]+)\]/);
   if (bracketMatch && bracketMatch[1]) {
     const org = bracketMatch[1].trim();
-    if (org && !/^(external|urgent|important|reminder|action required)$/i.test(org)) {
+    if (org && !/^(external|urgent|important|reminder|action required)$/i.test(org) && !/^(microsoft\s+teams|google|zoom)$/i.test(org)) {
       return org;
     }
   }
@@ -202,7 +284,7 @@ export function extractOrganization(senderName: string, subject: string, _body: 
     return opportunityMatch[1].trim();
   }
 
-  // 2. Pattern matching against subject text
+  // 2. Pattern matching against subject & body for recognizable companies & institutional programs
   const orgInSub = cleanSub.match(/\b(Infoedge(?:\s+India(?:\s+Ltd\.?)?)?|Info\s*Edge|Naukri|Sigmoid(?:\s+Analytics)?|Cognizant|IDFC(?:\s+First)?\s+Bank|Dr\.?\s*Reddy'?s|BNP\s+Paribas|TCS|Infosys|Wipro|Accenture|Deloitte|PwC|EY|KPMG|Amazon|Google|Microsoft|Flipkart|Uber|Adobe|Salesforce|TIME|AIMCAT)\b/i);
   if (orgInSub) {
     let org = orgInSub[1].trim();
@@ -212,10 +294,20 @@ export function extractOrganization(senderName: string, subject: string, _body: 
     return org;
   }
 
-  // 3. Sender Name fallback (excluding email addresses and generic tools like Teams/Zoom/Forms unless truly sender)
-  if (senderName && !senderName.includes('@') && !/^(microsoft\s+teams|google\s+forms|zoom\s+video)$/i.test(senderName.trim())) {
+  // Check institutional competitions/awards in subject (e.g. Smart India Hackathon, VC Excellence Award)
+  if (/\b(sih\s*20\d\d|smart\s+india\s+hackathon)\b/i.test(combined)) {
+    return 'Smart India Hackathon';
+  }
+  if (/\b(vc['’]?s\s+excellence\s+award|vice\s+chancellor)\b/i.test(combined)) {
+    return 'University';
+  }
+
+  // 3. Sender Name fallback ONLY if it is an organization and NOT a personal name
+  if (senderName && !senderName.includes('@')) {
     const cleanSender = senderName.replace(/^["']|["']$/g, '').trim();
-    if (cleanSender) return cleanSender;
+    if (cleanSender && !isPersonalName(cleanSender) && !/^(microsoft\s+teams|google\s+forms|zoom\s+video)$/i.test(cleanSender)) {
+      return cleanSender;
+    }
   }
 
   return '';
@@ -314,7 +406,7 @@ export function extractEventFromEmail(email: ParsedEmailMessage, nowDate: Date =
   const { actionRequired, actionDescription } = detectActionRequired(email.subject, email.plainText);
 
   // Extract structured dates
-  const dateResult = parseDateFromEmailText(email.plainText, email.subject, email.timestamp, nowDate);
+  const dateResult = parseDateFromEmailText(email.subject, email.plainText, email.timestamp, nowDate);
   const allDates = dateResult.allDates || (dateResult.date ? [dateResult.date] : []);
 
   // Extract multi-stage process stages
@@ -456,7 +548,7 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
     allDates: allDates.length > 0 ? allDates : undefined,
     stages: stagesList.length > 0 ? stagesList : undefined,
     actionRequired: primary.actionRequired || secondary.actionRequired,
-    actionDescription,
+    actionDescription: normalizeActionText(actionDescription || ''),
     links: mergedLinks,
     sourceMessages: Array.from(sourceMap.values()),
     status: calculateEventStatus(
