@@ -80,8 +80,8 @@ export const ACADEMIC_PLATFORMS = [
 ];
 
 export const GMAIL_SEARCH_CATEGORIES = {
-  ACADEMIC: 'subject:(exam OR test OR quiz OR assessment OR assignment OR submission OR "due date" OR deadline OR syllabus OR midterm OR finals OR grade OR lecture OR class OR course)',
-  CAREER: 'subject:(placement OR internship OR "job application" OR "coding round" OR interview OR shortlist OR offer OR test OR assessment OR drive OR OA OR PPT OR testlink)',
-  URGENT: 'subject:(urgent OR reminder OR "action required" OR "last date" OR "today" OR "tomorrow" OR closing OR overdue)',
+  ACADEMIC: '(exam OR test OR quiz OR assessment OR assignment OR submission OR "due date" OR deadline OR syllabus OR midterm OR finals OR grade OR lecture OR class OR course)',
+  CAREER: '(placement OR internship OR "job application" OR "coding round" OR interview OR shortlist OR offer OR test OR assessment OR drive OR OA OR PPT OR testlink OR campus OR hiring OR recruitment OR "campus details" OR "eligible students" OR "placement cell" OR "tnp" OR company)',
+  URGENT: '(urgent OR reminder OR "action required" OR "last date" OR "today" OR "tomorrow" OR closing OR overdue OR schedule OR process OR instructions)',
   GENERAL_FILTER: '-category:promotions -category:social -category:spam'
 };
