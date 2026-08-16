@@ -335,4 +335,93 @@ Interview\tYet to Decide\tIn Campus
     expect(resLink).toContain('No direct test link was found');
     expect(resLink).toContain('3:50 PM');
   });
+
+  it('ISSUE 1 & 2 BAIN: Role-aware organization extraction and multi-stage process extraction', () => {
+    const bainEmail: ParsedEmailMessage = {
+      id: 'msg-bain-1',
+      threadId: 'th-bain-1',
+      subject: 'Bain & Company Internship Process 2026',
+      sender: 'Placements Thapar <placements@thapar.edu>',
+      senderName: 'Placements Thapar',
+      senderEmail: 'placements@thapar.edu',
+      recipient: 'students@thapar.edu',
+      date: '2026-08-11T09:00:00Z',
+      timestamp: new Date('2026-08-11T09:00:00Z').getTime(),
+      snippet: 'Process schedule for Bain & Company internship',
+      plainText: `Dear Students,
+Please find below the schedule for Bain & Company Internship Process:
+
+- Pre-Placement Talk: August 13, 2026 at 11:00 AM
+- Online Assessment:
+  Registration: 5:00 PM to 5:30 PM
+  Assessment: 6:00 PM to 7:00 PM
+- Interviews: August 17, 2026 from 10:00 AM onwards
+
+All shortlisted candidates must be available on time.`,
+      links: [],
+      labels: ['INBOX']
+    };
+
+    const ev = extractEventFromEmail(bainEmail, fixedAug16)!;
+    expect(ev).toBeDefined();
+
+    // 1. Role-aware company extraction (Bain & Company, NOT Placements Thapar)
+    expect(ev.company).toBe('Bain & Company');
+    expect(ev.organization).toBe('Bain & Company');
+    expect(ev.company).not.toContain('Thapar');
+
+    // 2. Multi-stage process extraction (PPT, Assessment, Interviews)
+    expect(ev.stages).toBeDefined();
+    expect(ev.stages!.length).toBe(3);
+
+    const ppt = ev.stages!.find(s => s.type === 'ppt');
+    const oa = ev.stages!.find(s => s.type === 'assessment');
+    const interview = ev.stages!.find(s => s.type === 'interview');
+
+    expect(ppt).toBeDefined();
+    expect(ppt!.date).toBe('2026-08-13');
+    expect(ppt!.time).toBe('11:00 AM');
+
+    expect(oa).toBeDefined();
+    expect(oa!.time).toBe('6:00 PM');
+
+    expect(interview).toBeDefined();
+    expect(interview!.date).toBe('2026-08-17');
+    expect(interview!.time).toBe('10:00 AM');
+    expect(interview!.details).toContain('from 10:00 AM onwards');
+
+    // 3. Process Query Response ("tell me all details about interview process and dates of bain and company")
+    const processQuery = 'tell me all details about interview process and dates of bain and company';
+    const processConstraints = parseQueryConstraints(processQuery, fixedAug16);
+    const processRes = generateLocalDeterministicResponse(processQuery, [ev], fixedAug16, undefined, undefined, processConstraints);
+
+    expect(processRes).toContain('Bain & Company');
+    expect(processRes).toContain('Pre-Placement Talk');
+    expect(processRes).toContain('Online Assessment');
+    expect(processRes).toContain('Interviews');
+    expect(processRes).toContain('August 17');
+    expect(processRes).toContain('10:00 AM');
+    expect(processRes).toContain('not specified in the source email'); // Anti-hallucination notice
+
+    // 4. Follow-up Stage Query ("tell me about interview")
+    const chatHistory = [
+      { id: 'm1', role: 'user' as const, content: processQuery, timestamp: Date.now() - 5000 },
+      { id: 'm2', role: 'assistant' as const, content: processRes, events: [ev], timestamp: Date.now() - 2000 }
+    ];
+
+    const followUpQuery = 'tell me about interview';
+    const followUpConstraints = parseQueryConstraints(followUpQuery, fixedAug16, chatHistory);
+
+    expect(followUpConstraints.isEntitySpecific).toBe(true);
+    expect(followUpConstraints.entityQuery).toBe('bain');
+    expect(followUpConstraints.eventType).toBe('interview');
+
+    const followUpRes = generateLocalDeterministicResponse(followUpQuery, [ev], fixedAug16, undefined, undefined, followUpConstraints);
+    expect(followUpRes).toContain('Bain & Company — Interview Details');
+    expect(followUpRes).toContain('August 17');
+    expect(followUpRes).toContain('10:00 AM');
+    expect(followUpRes).not.toContain('Infoedge');
+    expect(followUpRes).not.toContain('IDFC');
+  });
 });
+

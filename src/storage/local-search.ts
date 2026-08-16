@@ -5,6 +5,7 @@ import { calculateEventStatus, isEventInRange } from '../services/extraction/dat
 import { ParsedEmailMessage } from '../types/gmail';
 import { mergeEvents, normalizeTitleForDeduplication } from '../services/extraction/event-extractor';
 import { parseQueryConstraints, QueryConstraints, normalizeEntityName } from '../services/retrieval/intent';
+import { ChatMessage } from '../types/ai';
 
 export interface LocalSearchResult {
   events: ExtractedEvent[];
@@ -146,7 +147,8 @@ function scoreEventForEntity(event: ExtractedEvent, constraints: QueryConstraint
  */
 export async function searchLocalDatabase(
   query: string,
-  nowDate: Date = new Date()
+  nowDate: Date = new Date(),
+  conversationHistory: ChatMessage[] = []
 ): Promise<LocalSearchResult> {
   const db = await getDatabase();
   // Using getAllEvents guarantees auto-migration & re-indexing from cached messages when schema changes
@@ -154,7 +156,7 @@ export async function searchLocalDatabase(
   const allMessages = await db.getAll('cached_messages');
 
   const lowerQuery = query.toLowerCase().trim();
-  const constraints = parseQueryConstraints(query, nowDate);
+  const constraints = parseQueryConstraints(query, nowDate, conversationHistory);
 
   // 1. Refresh dynamic status for all events relative to now
   const activeEvents = allEvents.map(event => {

@@ -20,27 +20,33 @@ USER CONTEXT & PRIORITIES:
 ${userContextPrompt}
 
 STRICT OPERATIONAL GUIDELINES:
-1. Natural & Grounded Tone: Speak like a smart, proactive personal assistant summarizing the inbox. Answer ONLY using the provided structured events and emails. If a detail is missing, state clearly that it is not specified. NEVER invent deadlines or links.
-2. Entity-Specific & Existence Queries:
+1. Natural & Grounded Tone: Speak like a smart, proactive personal assistant summarizing the inbox. Answer ONLY using the provided structured events, process stages, and emails. If a detail is missing, state clearly that it is not specified. NEVER invent deadlines, links, or interview formats.
+2. Multi-Stage Process & Interview Understanding:
+   - When an email/event represents a hiring or recruitment process (e.g. Bain & Company, Infoedge, Sigmoid):
+     - Identify the actual hiring company (e.g. Bain & Company) rather than the university placement sender.
+     - When the user asks about the overall process or specific stages (like interviews):
+       - Present the exact dates and times for each stage (PPT, Online Assessment, Interview).
+       - If the email does NOT specify interview rounds, format (case/technical), or location, explicitly state: "Interview format, number of rounds, and venue details are not specified in the email." Never hallucinate rounds or topics!
+3. Conversational Context & Follow-Up Resolution:
+   - When the user asks follow-up questions like "tell me about interview", "what about its date?", "what happens after that?":
+     - Understand that this refers to the active company/event discussed in the immediately preceding conversation turn.
+     - Do NOT perform a broad search for unrelated companies when the context clearly points to the active entity!
+4. Entity-Specific & Existence Queries:
    - When the user asks about a specific company or event (e.g. "do i have idfc test today?", "do i have infoedge test today?", "when is my idfc test?"):
      - For existence questions ("do i have X today?"):
        - Answer with a direct "Yes" or "No" as the first sentence.
-       - If YES: State the company/event name, start time (e.g. 4:00 PM), active window (e.g. 4:00 PM – 5:30 PM), and link distribution timing (e.g. link by 3:50 PM).
-       - If NO: State clearly that no X test is scheduled today, and mention the next scheduled date/time for that company if available (e.g. "Your next IDFC test is scheduled for August 21 at 10:00 AM").
+       - If YES: State the company/event name, start time (e.g. 4:00 PM), active window (e.g. 4:00 PM – 5:30 PM), and link distribution timing.
+       - If NO: State clearly that no X test is scheduled today, and mention the next scheduled date/time for that company if available.
        - NEVER dump unrelated events (such as AIMCAT or Unstop) when the user asked about a specific company!
-3. Intelligent Schedule Summaries (No Duplicate Robotic Dumps):
+5. Intelligent Schedule Summaries (No Duplicate Robotic Dumps):
    - For "Today and Tomorrow" queries:
      - Today: Mention tests/assessments starting or active today, deadlines due today, or meetings.
-     - Tomorrow: Mention any NEW event starting or due tomorrow. If no new events start tomorrow, state: "Nothing specifically scheduled for tomorrow." If an active test window from today continues tomorrow, mention it naturally: "The [Test Name] test window will still remain open."
+     - Tomorrow: Mention any NEW event starting or due tomorrow. If no new events start tomorrow, state: "Nothing specifically scheduled for tomorrow." If an active test window from today continues tomorrow, mention it naturally.
      - DO NOT blindly copy-paste the exact same event as a duplicate card under both days!
-     - Optional "Coming Up Soon": If there are 1–2 important deadlines or exams shortly after tomorrow (within 7 days), list them concisely under "Coming Up Soon".
-4. Conversational Clarity over Database Dumps:
-   - Instead of "Schedule: Aug 15–Aug 19", say: "The test can be taken anytime between August 15 and August 19."
-   - Instead of "Deadline: 2026-08-20 at 11:59 PM", say: "Registration closes on August 20 at 11:59 PM."
-5. Action Links:
-   - When referencing portal/test links, format cleanly as [Open Test Portal](url) or [Registration Form](url). Never dump raw social media links (Instagram, Facebook, etc.) or Unsubscribe links.
-6. Thread Deduplication: Never display duplicate "Re:" replies or forwarded copies of the same event. Consolidate them into one clear summary.
-7. Tone: Clean Markdown, concise, calm, and helpful. Avoid robot boilerplate like "Found X items" or "Here is the retrieved database info".`;
+6. Action Links:
+   - When referencing portal/test links, format cleanly as [Open Test Portal](url) or [Registration Form](url). Never dump raw social media links or Unsubscribe links.
+7. Thread Deduplication: Never display duplicate "Re:" replies or forwarded copies of the same event. Consolidate them into one clear summary.
+8. Tone: Clean Markdown, concise, calm, and helpful. Avoid robot boilerplate like "Found X items" or "Here is the retrieved database info".`;
 }
 
 export function buildUserPromptWithContext(
@@ -69,6 +75,13 @@ export function buildUserPromptWithContext(
                !['instagram', 'facebook', 'twitter', 'youtube', 'linkedin', 'unsubscribe', 'website'].includes(lbl);
       });
 
+      let stagesBlock = '';
+      if (ev.stages && ev.stages.length > 0) {
+        stagesBlock = 'Process Stages:\n' + ev.stages.map(st =>
+          `  - Stage: ${st.name} (Type: ${st.type}) | Date: ${st.date || 'TBD'} | Time: ${st.time || 'TBD'} | Details: ${st.details || 'N/A'}`
+        ).join('\n') + '\n';
+      }
+
       contextBlock += `[Event #${idx + 1}]
 Title: ${ev.title}
 Company/Organization: ${ev.company || ev.organization || 'N/A'}
@@ -76,7 +89,7 @@ Type: ${ev.type}
 Date Info: ${dateRangeStr} | Time: ${ev.time || 'Unspecified'} | Status: ${ev.status}
 Action Required: ${ev.actionRequired ? 'YES (' + (ev.actionDescription || 'See email') + ')' : 'NO'}
 Direct Action Links: ${actionLinks.map(l => `${l.label}: ${l.url}`).join(', ') || 'None'}
-Source Emails: ${ev.sourceMessages.map(s => `"${s.subject}" (Sent: ${s.receivedAt})`).join('; ')}
+${stagesBlock}Source Emails: ${ev.sourceMessages.map(s => `"${s.subject}" (Sent: ${s.receivedAt})`).join('; ')}
 \n`;
     });
   }

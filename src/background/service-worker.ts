@@ -76,8 +76,8 @@ async function handleMessage(req: ExtensionRequest): Promise<any> {
       const settings = await getSettings();
       const now = new Date();
 
-      // Step 1: Query Local IndexedDB Index First (Extract Once -> Query Many)
-      const localResult = await searchLocalDatabase(req.query, now);
+      // Step 1: Query Local IndexedDB Index First with conversational context resolution
+      const localResult = await searchLocalDatabase(req.query, now, req.conversationHistory || []);
 
       let contextEmails = localResult.cachedMessages;
       let relevantEvents = localResult.events;
@@ -87,7 +87,7 @@ async function handleMessage(req: ExtensionRequest): Promise<any> {
         try {
           const auth = await OAuthManager.getInstance().getStatus();
           if (auth.isAuthenticated) {
-            const intent = analyzeIntent(req.query, now);
+            const intent = analyzeIntent(req.query, now, req.conversationHistory || []);
             const gmail = GmailClient.getInstance();
             const liveEmails = await gmail.searchMessages(intent.gmailQuery, 6);
 

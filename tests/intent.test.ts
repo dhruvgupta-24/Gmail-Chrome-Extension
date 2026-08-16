@@ -71,9 +71,101 @@ describe('Query Intent & Constraint Parser', () => {
     expect(c.questionType).toBe('existence');
   });
 
+  it('extracts constraints for "tell me all details about interview process and dates of bain and company"', () => {
+    const c = parseQueryConstraints('tell me all details about interview process and dates of bain and company', refDate);
+    expect(c.isEntitySpecific).toBe(true);
+    expect(c.entityQuery).toBe('bain');
+    expect(c.questionType).toBe('process_query');
+    expect(c.eventType).toBe('interview');
+  });
+
+  it('CONVERSATIONAL CONTEXT: Resolves follow-up "tell me about interview" using active entity from chat history', () => {
+    const mockHistory: any[] = [
+      {
+        id: 'msg-1',
+        role: 'user',
+        content: 'tell me all details about interview process and dates of bain and company',
+        timestamp: Date.now() - 10000
+      },
+      {
+        id: 'msg-2',
+        role: 'assistant',
+        content: 'Here are the details for Bain & Company...',
+        events: [
+          {
+            id: 'thread-bain',
+            title: 'Bain & Company Internship Process',
+            company: 'Bain & Company',
+            organization: 'Bain & Company',
+            type: 'placement'
+          }
+        ],
+        timestamp: Date.now() - 5000
+      }
+    ];
+
+    const followUp = parseQueryConstraints('tell me about interview', refDate, mockHistory);
+    expect(followUp.isEntitySpecific).toBe(true);
+    expect(followUp.entityQuery).toBe('bain');
+    expect(followUp.rawEntity).toBe('Bain & Company');
+    expect(followUp.eventType).toBe('interview');
+    expect(followUp.isConversationalFollowUp).toBe(true);
+  });
+
+  it('PRONOUN / ELLIPSIS: Resolves "what about its date?" and "what happens after that?" using active conversation entity', () => {
+    const mockHistory: any[] = [
+      {
+        id: 'msg-1',
+        role: 'assistant',
+        content: 'Bain & Company recruitment process overview',
+        events: [{ id: 'bain-1', title: 'Bain Process', company: 'Bain & Company', type: 'placement' }]
+      }
+    ];
+
+    const dateQuery = parseQueryConstraints('what about its date?', refDate, mockHistory);
+    expect(dateQuery.isEntitySpecific).toBe(true);
+    expect(dateQuery.entityQuery).toBe('bain');
+
+    const nextStep = parseQueryConstraints('what happens after that?', refDate, mockHistory);
+    expect(nextStep.isEntitySpecific).toBe(true);
+    expect(nextStep.entityQuery).toBe('bain');
+  });
+
+  it('EXPLICIT OVERRIDE: Explicit entity in new query overrides previous conversational entity', () => {
+    const mockHistory: any[] = [
+      {
+        id: 'msg-1',
+        role: 'assistant',
+        content: 'Bain & Company recruitment process overview',
+        events: [{ id: 'bain-1', title: 'Bain Process', company: 'Bain & Company', type: 'placement' }]
+      }
+    ];
+
+    const overrideQuery = parseQueryConstraints('tell me about Microsoft interview instead', refDate, mockHistory);
+    expect(overrideQuery.isEntitySpecific).toBe(true);
+    expect(overrideQuery.entityQuery).toBe('microsoft');
+    expect(overrideQuery.entityQuery).not.toBe('bain');
+  });
+
+  it('GLOBAL INTENT: "what do i have tomorrow?" remains a global query and is NOT constrained to active entity', () => {
+    const mockHistory: any[] = [
+      {
+        id: 'msg-1',
+        role: 'assistant',
+        content: 'Bain & Company recruitment process overview',
+        events: [{ id: 'bain-1', title: 'Bain Process', company: 'Bain & Company', type: 'placement' }]
+      }
+    ];
+
+    const globalQuery = parseQueryConstraints('what do i have tomorrow?', refDate, mockHistory);
+    expect(globalQuery.isEntitySpecific).toBe(false);
+    expect(globalQuery.dateRange?.startDate).toBe('2026-08-16');
+  });
+
   it('generates targeted entity search query for live Gmail API', () => {
     const intent = analyzeIntent('do i have idfc test today?', refDate);
     expect(intent.queryType).toBe('specific_search');
     expect(intent.gmailQuery).toContain('idfc');
   });
 });
+

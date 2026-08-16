@@ -192,9 +192,10 @@ function formatEntitySpecificResponse(
   _nowDate: Date,
   matchedOnRequestedDate?: boolean
 ): string {
-  const entityDisplay = constraints.rawEntity
+  const primaryEvent = events[0];
+  const entityDisplay = primaryEvent?.company || primaryEvent?.organization || (constraints.rawEntity
     ? constraints.rawEntity.charAt(0).toUpperCase() + constraints.rawEntity.slice(1)
-    : (constraints.entityQuery || 'the requested');
+    : (constraints.entityQuery || 'the requested'));
 
   const eventTypeDisplay = constraints.eventType && constraints.eventType !== 'any'
     ? constraints.eventType
@@ -208,8 +209,6 @@ function formatEntitySpecificResponse(
     }
     return `I couldn't find any **${entityDisplay}** ${eventTypeDisplay} or schedule in your indexed emails.`;
   }
-
-  const primaryEvent = events[0];
 
   // Check if query is targeting a specific process stage or date
   const todayStr = toDateString(_nowDate);
@@ -314,7 +313,59 @@ function formatEntitySpecificResponse(
     }
   }
 
-  // Scenario 3: Time query (e.g. "when is my idfc test?", "when is the infoedge test?", "when was the infoedge ppt?")
+  // Scenario 3: Process Query or Multi-Stage Overview (e.g. "tell me all details about interview process and dates of bain and company")
+  if (
+    constraints.questionType === 'process_query' ||
+    (constraints.questionType === 'general_summary' && primaryEvent.stages && primaryEvent.stages.length > 1 && !constraints.dateRange && (!constraints.eventType || constraints.eventType === 'any' || constraints.eventType === 'placement' || constraints.eventType === 'internship'))
+  ) {
+    let res = `### ${entityDisplay} — Recruitment Process & Schedule\n\n`;
+    res += `Here are the complete dates and process stages for **${entityDisplay}**:\n\n`;
+    for (const st of primaryEvent.stages || []) {
+      const stDate = st.date ? formatMonthDay(st.date) : 'Yet to decide';
+      const stTime = st.time ? ` at ${st.time}` : '';
+      const stDetails = st.details ? ` — *${st.details}*` : '';
+      const stLink = getBestActionLinkForStage(st.type, st.links, primaryEvent.links);
+      const stLinkStr = stLink ? ` [${stLink.label}](${stLink.url})` : '';
+      res += `• **${st.name}**: ${stDate}${stTime}${stDetails}${stLinkStr}\n`;
+    }
+    if (actionDetails) {
+      res += `\n**Instructions:**${actionDetails}\n`;
+    }
+    res += `\n*Note: Interview format, number of rounds, and venue details are not specified in the source email.*`;
+    return res.trim();
+  }
+
+  // Scenario 4: Stage-Specific Query (e.g. "tell me about interview", "when is the interview?")
+  if (constraints.eventType === 'interview' && primaryEvent.stages && primaryEvent.stages.length > 0) {
+    const interviewStage = primaryEvent.stages.find(s => s.type === 'interview');
+    if (interviewStage) {
+      const intDate = interviewStage.date ? formatMonthDay(interviewStage.date) : 'Yet to decide';
+      const intTime = interviewStage.time ? ` at ${interviewStage.time}` : '';
+      const intDetails = interviewStage.details ? ` (${interviewStage.details})` : '';
+      const intLink = getBestActionLinkForStage('interview', interviewStage.links, primaryEvent.links);
+      const intLinkStr = intLink ? ` [${intLink.label}](${intLink.url})` : '';
+
+      let res = `### ${entityDisplay} — Interview Details\n\n`;
+      res += `• **Interview Date**: ${intDate}${intTime}${intDetails}${intLinkStr}\n\n`;
+
+      // Show surrounding stages for full context
+      const otherStages = primaryEvent.stages.filter(s => s.type !== 'interview');
+      if (otherStages.length > 0) {
+        res += `**Full Process Schedule:**\n`;
+        for (const os of otherStages) {
+          const osDate = os.date ? formatMonthDay(os.date) : 'TBD';
+          const osTime = os.time ? ` at ${os.time}` : '';
+          res += `• **${os.name}**: ${osDate}${osTime}${os.details ? ` (${os.details})` : ''}\n`;
+        }
+        res += `\n`;
+      }
+
+      res += `*Note: Interview format, number of rounds, and venue details are not specified in the email.*`;
+      return res.trim();
+    }
+  }
+
+  // Scenario 5: Time query (e.g. "when is my idfc test?", "when is the infoedge test?", "when was the infoedge ppt?")
   if (constraints.questionType === 'time_query') {
     if (primaryEvent.isContinuousRange && primaryEvent.startDate && primaryEvent.endDate) {
       return `The test window for **${stageTitle}** is open from ${formatMonthDay(primaryEvent.startDate)} to ${formatMonthDay(primaryEvent.endDate)}.${actionDetails}${linkStr}`;
@@ -329,7 +380,7 @@ function formatEntitySpecificResponse(
     return `Your **${stageTitle}** is scheduled for ${dateFormatted}${timeStr}.${actionDetails}${linkStr}`;
   }
 
-  // Scenario 4: Link query (e.g. "where is the idfc link?")
+  // Scenario 6: Link query (e.g. "where is the idfc link?")
   if (constraints.questionType === 'link_query') {
     if (bestLink) {
       return `Here is the link for **${stageTitle}**: [${bestLink.label}](${bestLink.url}).`;
