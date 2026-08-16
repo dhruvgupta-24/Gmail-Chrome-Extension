@@ -3,7 +3,7 @@ import { ParsedEmailMessage } from '../../types/gmail';
 import { parseDateFromEmailText } from './date-parser';
 import { extractActionLinks } from '../gmail/links';
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /**
  * Strips email reply/forward prefixes, tags, and extraneous whitespace to produce a clean display title.
@@ -33,7 +33,7 @@ export function cleanEventTitle(subject: string): string {
 export function normalizeTitleForDeduplication(title: string): string {
   return cleanEventTitle(title)
     .toLowerCase()
-    .replace(/\b(is\s+live|invites\s+you\s+to\s+take|invitation\s+to\s+take|invitation\s+for|details?|campus\s+detail)\b/gi, '')
+    .replace(/\b(is\s+live|invites\s+you\s+to\s+take|invitation\s+to\s+take|invitation\s+for|details?|campus\s+details?|hiring\s+process)\b/gi, '')
     .replace(/[^a-z0-9]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -45,7 +45,7 @@ export function normalizeTitleForDeduplication(title: string): string {
 export function detectEventType(subject: string, body: string): EventType {
   const combined = `${subject} ${body}`.toLowerCase();
 
-  if (/\b(coding\s+round|oa\b|online\s+assessment|hackerrank|codeforces|leetcode|mettl|wheebox|test\s+credentials)\b/i.test(combined)) {
+  if (/\b(coding\s+round|oa\b|online\s+assessment|technical\s+assessment|hackerrank|codeforces|leetcode|mettl|wheebox|test\s+credentials)\b/i.test(combined)) {
     return 'coding_round';
   }
   if (/\b(interview|technical\s+round|hr\s+round|interview\s+schedule|discussion\s+round)\b/i.test(combined)) {
@@ -86,13 +86,33 @@ export function detectEventType(subject: string, body: string): EventType {
 }
 
 /**
- * Detects if action is required from the recipient.
+ * Detects if action is required from the recipient and extracts operational details (e.g. active window, link arrival).
  */
 export function detectActionRequired(subject: string, body: string): { actionRequired: boolean; actionDescription?: string } {
-  const combined = `${subject} ${body}`.toLowerCase();
+  const combined = `${subject}\n${body}`;
+  const lower = combined.toLowerCase();
+
+  // 1. Check for specific operational timing details in email
+  // e.g. "Test will be active between 4 pm - 5:30 pm. Link will be shared by 3:50PM."
+  const activeWindowMatch = combined.match(/\b(?:test|assessment)\s+will\s+be\s+active\s+(?:between|from)?\s*([^.\n]+)/i);
+  const linkShareMatch = combined.match(/\blink\s+will\s+be\s+shared\s+by\s*([^.\n]+)/i);
+
+  if (activeWindowMatch || linkShareMatch) {
+    const parts: string[] = [];
+    if (activeWindowMatch) {
+      parts.push(`The test will be active ${activeWindowMatch[0].trim()}`);
+    }
+    if (linkShareMatch) {
+      parts.push(`The link will be shared by ${linkShareMatch[1].trim()}`);
+    }
+    return {
+      actionRequired: true,
+      actionDescription: `${parts.join(', and ')}.`
+    };
+  }
 
   const actionPhrases = [
-    { pattern: /register\s+before|deadline\s+to\s+register|registration\s+closing/i, desc: 'Complete registration before the deadline.' },
+    { pattern: /register\s+before|deadline\s+to\s+register|registration\s+closing|registration\s+deadline/i, desc: 'Complete registration before the deadline.' },
     { pattern: /submit\s+your\s+assignment|submission\s+due|upload\s+your/i, desc: 'Submit required coursework or project.' },
     { pattern: /start\s+your\s+test|assessment\s+link\s+active|take\s+the\s+assessment|complete\s+the\s+assessment|test\s+credentials/i, desc: 'Complete the online test/assessment.' },
     { pattern: /join\s+the\s+interview|interview\s+scheduled|attend\s+the\s+meeting/i, desc: 'Attend scheduled interview or meeting.' },
@@ -102,12 +122,12 @@ export function detectActionRequired(subject: string, body: string): { actionReq
   ];
 
   for (const { pattern, desc } of actionPhrases) {
-    if (pattern.test(combined)) {
+    if (pattern.test(lower)) {
       return { actionRequired: true, actionDescription: desc };
     }
   }
 
-  if (/\b(due\s+today|due\s+tomorrow|urgent|mandatory|action\s+required)\b/i.test(combined)) {
+  if (/\b(due\s+today|due\s+tomorrow|urgent|mandatory|action\s+required)\b/i.test(lower)) {
     return { actionRequired: true, actionDescription: 'Action required before specified deadline.' };
   }
 
@@ -119,9 +139,13 @@ export function detectActionRequired(subject: string, body: string): { actionReq
  */
 export function extractOrganization(senderName: string, subject: string, body: string = ''): string {
   const textToScan = `${senderName} ${subject} ${body.substring(0, 300)}`;
-  const companyMatch = textToScan.match(/\b(Sigmoid(?:\s+Analytics)?|Cognizant|Amazon|Google|Microsoft|Bain(?:\s+&\s+Company)?|Goldman\s+Sachs|McKinsey|Flipkart|Uber|Adobe|Salesforce|TCS|Infosys|Wipro|Accenture|Deloitte|PwC|EY|KPMG|IDFC\s+First\s+Bank|Dr\.?\s*Reddy'?s|BNP\s+Paribas|TIME|AIMCAT)\b/i);
+  const companyMatch = textToScan.match(/\b(Infoedge(?:\s+India(?:\s+Ltd\.?)?)?|Info\s*Edge|Naukri|Sigmoid(?:\s+Analytics)?|Cognizant|Amazon|Google|Microsoft|Bain(?:\s+&\s+Company)?|Goldman\s+Sachs|McKinsey|Flipkart|Uber|Adobe|Salesforce|TCS|Infosys|Wipro|Accenture|Deloitte|PwC|EY|KPMG|IDFC\s+First\s+Bank|Dr\.?\s*Reddy'?s|BNP\s+Paribas|TIME|AIMCAT)\b/i);
   if (companyMatch) {
-    return companyMatch[1].trim();
+    let org = companyMatch[1].trim();
+    if (/^info\s*edge/i.test(org) || /^naukri/i.test(org)) {
+      org = 'Infoedge India Ltd.';
+    }
+    return org;
   }
 
   if (senderName && !senderName.includes('@')) {
@@ -140,8 +164,7 @@ export function extractOrganization(senderName: string, subject: string, body: s
  * Deterministically extracts structured event from a parsed Gmail message.
  */
 export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Date = new Date()): ExtractedEvent | null {
-  const combinedText = `${email.subject}\n\n${email.plainText}`;
-  const dateResult = parseDateFromEmailText(combinedText, email.timestamp, currentNow);
+  const dateResult = parseDateFromEmailText(email.subject, email.plainText, email.timestamp, currentNow);
   const type = detectEventType(email.subject, email.plainText);
   const { actionRequired, actionDescription } = detectActionRequired(email.subject, email.plainText);
   const links = extractActionLinks(email.htmlContent || email.plainText);
@@ -196,8 +219,8 @@ export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Dat
 }
 
 /**
- * Merges multiple events (e.g. from same thread, forwarded copy, or identical subject)
- * without creating artificial date ranges.
+ * Merges multiple emails belonging to the same process or thread
+ * preserving timing updates, action descriptions, and discrete dates.
  */
 export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent): ExtractedEvent {
   // Merge source messages avoiding duplicate messageId
@@ -222,6 +245,16 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
   const isContinuous = primary.isContinuousRange || secondary.isContinuousRange || false;
   const isDeadline = primary.isDeadline || secondary.isDeadline || false;
 
+  // Preserve the most informative action description
+  let combinedDesc = primary.actionDescription || secondary.actionDescription;
+  if (primary.actionDescription && secondary.actionDescription && primary.actionDescription !== secondary.actionDescription) {
+    if (primary.actionDescription.length >= secondary.actionDescription.length) {
+      combinedDesc = primary.actionDescription;
+    } else {
+      combinedDesc = secondary.actionDescription;
+    }
+  }
+
   return {
     ...primary,
     title: cleanEventTitle(primary.title.length >= secondary.title.length ? primary.title : secondary.title),
@@ -235,7 +268,7 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
     isDeadline,
     allDates: allDates.length > 0 ? allDates : undefined,
     actionRequired: primary.actionRequired || secondary.actionRequired,
-    actionDescription: primary.actionDescription || secondary.actionDescription,
+    actionDescription: combinedDesc,
     organization: primary.organization || secondary.organization,
     links: Array.from(linkMap.values()),
     sourceMessages: Array.from(sourceMap.values()),

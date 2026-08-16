@@ -1,8 +1,9 @@
 import { getDatabase } from './database';
 import { ExtractedEvent, DateRangeQuery } from '../types/events';
-import { calculateEventStatus, parseQueryDateRange, isEventInRange } from '../services/extraction/date-parser';
+import { calculateEventStatus, isEventInRange } from '../services/extraction/date-parser';
 import { ParsedEmailMessage } from '../types/gmail';
 import { mergeEvents, normalizeTitleForDeduplication } from '../services/extraction/event-extractor';
+import { parseQueryConstraints, QueryConstraints, normalizeEntityName } from '../services/retrieval/intent';
 
 export interface LocalSearchResult {
   events: ExtractedEvent[];
@@ -10,6 +11,9 @@ export interface LocalSearchResult {
   source: 'local_index';
   isDateQuery?: boolean;
   dateRange?: DateRangeQuery;
+  constraints?: QueryConstraints;
+  isEntitySpecific?: boolean;
+  matchedOnRequestedDate?: boolean;
 }
 
 /**
@@ -66,7 +70,56 @@ export function deduplicateEvents(events: ExtractedEvent[]): ExtractedEvent[] {
 }
 
 /**
- * Searches the local IndexedDB database for events and cached messages matching user query and intent.
+ * Evaluates semantic match between an event and an entity query constraint.
+ */
+function scoreEventForEntity(event: ExtractedEvent, constraints: QueryConstraints): number {
+  if (!constraints.entityQuery) return 0;
+
+  const targetEntity = constraints.entityQuery;
+  const rawEntity = constraints.rawEntity || targetEntity;
+
+  const orgNorm = normalizeEntityName(event.organization || event.company || '');
+  const titleNorm = normalizeTitleForDeduplication(event.title);
+  const fullText = `${event.title} ${event.company || ''} ${event.organization || ''} ${event.sourceMessages.map(m => m.subject).join(' ')}`.toLowerCase();
+
+  let score = 0;
+
+  // 1. Exact canonical org match
+  if (orgNorm === targetEntity || (event.company && event.company.toLowerCase().includes(rawEntity))) {
+    score += 100;
+  }
+
+  // 2. Title contains entity
+  if (fullText.includes(rawEntity) || titleNorm.includes(targetEntity)) {
+    score += 80;
+  }
+
+  // 3. If no entity keyword matches anywhere in the event, return 0 (strict non-match)
+  if (score === 0) {
+    return 0;
+  }
+
+  // 4. Event type matching boost
+  if (constraints.eventType && constraints.eventType !== 'any') {
+    const isTestType = ['test', 'assessment', 'coding_round', 'quiz', 'exam'].includes(event.type);
+    const hasTestKeywords = /\b(assessment|test|oa|exam|coding\s+round|online\s+test)\b/i.test(fullText);
+
+    if (constraints.eventType === 'test' && (isTestType || hasTestKeywords)) {
+      score += 40;
+    } else if (constraints.eventType === 'interview' && event.type === 'interview') {
+      score += 40;
+    } else if (constraints.eventType === 'ppt' && (event.type === 'ppt' || fullText.includes('ppt') || fullText.includes('presentation'))) {
+      score += 40;
+    } else if (constraints.eventType === 'deadline' && (event.isDeadline || event.type === 'registration' || fullText.includes('deadline'))) {
+      score += 40;
+    }
+  }
+
+  return score;
+}
+
+/**
+ * Searches the local database for events and cached messages matching user query and constraints.
  */
 export async function searchLocalDatabase(
   query: string,
@@ -77,6 +130,7 @@ export async function searchLocalDatabase(
   const allMessages = await db.getAll('cached_messages');
 
   const lowerQuery = query.toLowerCase().trim();
+  const constraints = parseQueryConstraints(query, nowDate);
 
   // 1. Refresh dynamic status for all events relative to now
   const activeEvents = allEvents.map(event => {
@@ -93,18 +147,94 @@ export async function searchLocalDatabase(
     };
   });
 
-  // 2. First Priority: Check if query asks for a specific date or date range (e.g. "today and tomorrow")
-  const dateRange = parseQueryDateRange(query, nowDate);
+  // 2. HIGHEST PRIORITY: Entity-Aware Search (e.g. "do i have idfc test today?", "when is infoedge test?")
+  if (constraints.isEntitySpecific && constraints.entityQuery) {
+    // Score all events against the target entity
+    const scoredEvents: { event: ExtractedEvent; score: number }[] = [];
 
-  if (dateRange.isDateQuery && dateRange.startDate && dateRange.endDate) {
-    // Strictly filter events whose actual event dates / window / deadline overlap the requested range
+    for (const ev of activeEvents) {
+      const score = scoreEventForEntity(ev, constraints);
+      if (score > 0) {
+        scoredEvents.push({ event: ev, score });
+      }
+    }
+
+    // Sort by relevance score descending
+    scoredEvents.sort((a, b) => b.score - a.score);
+
+    const dedupedEntityEvents = deduplicateEvents(scoredEvents.map(s => s.event));
+
+    if (dedupedEntityEvents.length > 0) {
+      let finalEvents = dedupedEntityEvents;
+      let matchedOnRequestedDate: boolean | undefined = undefined;
+
+      // If a specific date range was requested (e.g. "today" / "tomorrow" / "Aug 16")
+      if (constraints.dateRange && constraints.dateRange.startDate && constraints.dateRange.endDate) {
+        const queryStart = constraints.dateRange.startDate;
+        const queryEnd = constraints.dateRange.endDate;
+
+        // Check if any event for this entity overlaps the requested date
+        const dateMatched = dedupedEntityEvents.filter(ev => isEventInRange(ev, queryStart, queryEnd));
+
+        if (dateMatched.length > 0) {
+          matchedOnRequestedDate = true;
+          finalEvents = dateMatched;
+        } else {
+          matchedOnRequestedDate = false;
+          // Keep all upcoming events for this entity so the responder can state when the next one is
+          const upcomingOrAll = dedupedEntityEvents.filter(e => e.status !== 'past');
+          finalEvents = upcomingOrAll.length > 0 ? upcomingOrAll : dedupedEntityEvents;
+        }
+      }
+
+      // Sort chronological
+      finalEvents.sort((a, b) => {
+        const dateA = a.startDate || a.date || '';
+        const dateB = b.startDate || b.date || '';
+        return dateA.localeCompare(dateB);
+      });
+
+      // Find matching messages for this entity
+      const entityRaw = constraints.rawEntity || constraints.entityQuery;
+      const matchedMessages = allMessages.filter(m => {
+        const searchSpace = `${m.subject} ${m.sender} ${m.plainText}`.toLowerCase();
+        return searchSpace.includes(entityRaw);
+      }).slice(0, 5);
+
+      return {
+        events: finalEvents,
+        cachedMessages: matchedMessages,
+        source: 'local_index',
+        constraints,
+        isEntitySpecific: true,
+        isDateQuery: Boolean(constraints.dateRange),
+        dateRange: constraints.dateRange,
+        matchedOnRequestedDate
+      };
+    } else {
+      // Entity was specified but no matching events were found in indexed database
+      return {
+        events: [],
+        cachedMessages: [],
+        source: 'local_index',
+        constraints,
+        isEntitySpecific: true,
+        isDateQuery: Boolean(constraints.dateRange),
+        dateRange: constraints.dateRange,
+        matchedOnRequestedDate: false
+      };
+    }
+  }
+
+  // 3. Date-Range Query (when NO specific entity was requested, e.g. "what do i have today and tomorrow?")
+  const dateRange = constraints.dateRange;
+  if (dateRange && dateRange.isDateQuery && dateRange.startDate && dateRange.endDate) {
     const rangeMatchedEvents = activeEvents.filter(ev =>
       isEventInRange(ev, dateRange.startDate!, dateRange.endDate!)
     );
 
     const dedupedRangeEvents = deduplicateEvents(rangeMatchedEvents);
 
-    // Sort chronologically by start date, then time
     dedupedRangeEvents.sort((a, b) => {
       const dateA = a.startDate || a.date || '';
       const dateB = b.startDate || b.date || '';
@@ -126,11 +256,12 @@ export async function searchLocalDatabase(
       cachedMessages: matchedMessages,
       source: 'local_index',
       isDateQuery: true,
-      dateRange
+      dateRange,
+      constraints
     };
   }
 
-  // 3. Categorical & Keyword search
+  // 4. Categorical & Keyword search
   let matchedEvents: ExtractedEvent[] = [];
 
   const isTodayQuery = lowerQuery.includes('today') || lowerQuery.includes('due today') || lowerQuery.includes('today briefing');
@@ -197,7 +328,8 @@ export async function searchLocalDatabase(
   return {
     events: dedupedEvents,
     cachedMessages: matchedMessages,
-    source: 'local_index'
+    source: 'local_index',
+    constraints
   };
 }
 

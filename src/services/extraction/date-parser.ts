@@ -7,8 +7,8 @@ export interface ParsedDateResult {
   isContinuousRange?: boolean; // True ONLY if explicit continuous window
   isDeadline?: boolean; // True if it represents a point-in-time deadline
   allDates?: string[]; // Discrete dates in ISO YYYY-MM-DD
-  time?: string; // e.g. "11:59 PM", "10:00 AM"
-  deadline?: string; // Point-in-time deadline string
+  time?: string; // e.g. "11:59 PM", "10:00 AM", "23:59 HRS"
+  deadline?: string; // Point-in-time deadline string with time if available
   status: EventStatus;
 }
 
@@ -32,15 +32,6 @@ const MONTH_NAMES = [
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
 ];
 
-const DAY_OF_WEEK_MAP: Record<string, number> = {
-  sunday: 0, sun: 0,
-  monday: 1, mon: 1,
-  tuesday: 2, tue: 2, tues: 2,
-  wednesday: 3, wed: 3,
-  thursday: 4, thu: 4, thur: 4, thurs: 4,
-  friday: 5, fri: 5,
-  saturday: 6, sat: 6
-};
 
 /**
  * Formats a Date to YYYY-MM-DD string in local time.
@@ -69,11 +60,6 @@ export function parseISODate(dateStr: string): Date | null {
 
 /**
  * Determines EventStatus based on comparing the event's actual date/range/deadline with the user's reference date.
- * 
- * CRITICAL RULE: An event is ONLY 'today' if:
- * 1. Its single date or deadline is TODAY, OR
- * 2. It has an explicit continuous window that encompasses TODAY, OR
- * 3. Its discrete dates array includes TODAY.
  */
 export function calculateEventStatus(
   targetDateStr?: string,
@@ -119,9 +105,10 @@ export function calculateEventStatus(
 }
 
 /**
- * Extracts standard time strings (e.g. "11:59 PM", "10:00 AM", "17:30") from text.
+ * Extracts standard time strings (e.g. "11:59 PM", "10:00 AM", "23:59 HRS") from a local text snippet.
  */
 export function extractTimeFromText(text: string): string | undefined {
+  if (!text) return undefined;
   const timeRegex = /\b(?:at\s+|by\s+|before\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)|\d{1,2}:\d{2}(?:\s*(?:hrs|hours))?)\b/i;
   const match = text.match(timeRegex);
   if (match) {
@@ -135,100 +122,201 @@ export function extractTimeFromText(text: string): string | undefined {
   return undefined;
 }
 
+// Helper to format ISO date
+const toISO = (y: number, m: number, d: number) => {
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+};
+
+const parseMonth = (mStr: string): number | undefined => {
+  if (!mStr) return undefined;
+  return MONTH_MAP[mStr.toLowerCase().substring(0, 3)];
+};
+
+interface DateCandidate {
+  date: string;
+  startDate?: string;
+  endDate?: string;
+  allDates?: string[];
+  isContinuousRange?: boolean;
+  isDeadline?: boolean;
+  time?: string;
+  score: number;
+  sourceContext: string;
+  isSubject: boolean;
+}
+
 /**
- * Extracts actual event dates from email content.
- * 
- * IMPORTANT RULES:
- * 1. NEVER use email sent/received date as an event start/end date.
- * 2. Point-in-time deadlines (e.g. "Registration Deadline - 20th Aug 2026") are marked isDeadline: true and do NOT create an interval.
- * 3. Discrete multi-date expressions (e.g. "12th, 24th & 25th August 2026") store all individual dates in allDates.
- * 4. Continuous windows (e.g. "15-Aug-2026 to 19-Aug-2026" or "from 15th August to 19th August") are marked isContinuousRange: true.
+ * Strips quoted replies, forwarded headers, and disclaimers to get the primary email content.
  */
-export function parseDateFromEmailText(
+function cleanEmailBody(body: string): { primary: string; quoted: string } {
+  if (!body) return { primary: '', quoted: '' };
+
+  const splitPatterns = [
+    /\n\s*On\s+.+?wrote:\s*\n/i,
+    /\n\s*-----Original Message-----\s*\n/i,
+    /\n\s*From:\s+.+?\nSent:\s+/i,
+    /\n\s*_{10,}\s*\n/,
+    /\n\s*This email and any files transmitted with it are confidential/i
+  ];
+
+  let minSplitIdx = body.length;
+  for (const pat of splitPatterns) {
+    const match = body.match(pat);
+    if (match && match.index !== undefined && match.index < minSplitIdx) {
+      minSplitIdx = match.index;
+    }
+  }
+
+  const primary = body.substring(0, minSplitIdx);
+  const quoted = body.substring(minSplitIdx);
+  return { primary, quoted };
+}
+
+/**
+ * Finds all date candidates in a section of text with context-aware semantic scoring.
+ */
+function extractCandidatesFromSection(
   text: string,
-  emailTimestamp: number | Date = Date.now(),
-  currentNow: Date = new Date()
-): ParsedDateResult {
-  const refDate = new Date(emailTimestamp);
-  const time = extractTimeFromText(text);
-  const lower = text.toLowerCase();
+  isSubject: boolean,
+  isQuoted: boolean,
+  refYear: number
+): DateCandidate[] {
+  const candidates: DateCandidate[] = [];
+  if (!text) return candidates;
 
-  const parseMonth = (mStr: string): number | undefined => {
-    return MONTH_MAP[mStr.toLowerCase().substring(0, 3)];
-  };
+  // 1. Explicit Deadline Phrases (+100 score)
+  // e.g. "Registration Deadline - 20th Aug 2026", "Deadline: Aug 20, 2026", "Last date to apply is 20-Aug-2026"
+  const deadlineRegexes = [
+    /\b(?:registration\s+deadline|deadline\s*[-:]|last\s+date\s+(?:to\s+(?:register|apply)|for\s+(?:registration|submission))|registration\s+closes|apply\s+before|submit\s+by|closing\s+date|due\s+date)\s*(?:[-:]|\s+is|\s+on|\s+by|\s+is\s+on|\s+is\s+by)?\s*(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?(?:\s+(?:at|by|before)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|hrs|hours)?))?\b/gi,
+    /\b(?:registration\s+deadline|deadline\s*[-:]|last\s+date\s+(?:to\s+(?:register|apply)|for\s+(?:registration|submission))|registration\s+closes|apply\s+before|submit\s+by|closing\s+date|due\s+date)\s*(?:[-:]|\s+is|\s+on|\s+by|\s+is\s+on|\s+is\s+by)?\s*(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?(?:\s+(?:at|by|before)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|hrs|hours)?))?\b/gi,
+    /\b(?:registration\s+deadline|deadline\s*[-:]|last\s+date|apply\s+before|submit\s+by)\s*(?:[-:]|\s+is|\s+on|\s+by|\s+is\s+on|\s+is\s+by)?\s*(\d{1,2})[-/]([a-z]{3}|\d{1,2})[-/](\d{2,4})(?:\s+(?:at|by|before)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|hrs|hours)?))?\b/gi
+  ];
 
-  // Helper to format ISO date
-  const toISO = (y: number, m: number, d: number) => {
-    return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  };
+  for (const regex of deadlineRegexes) {
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(text)) !== null) {
+      let d: number, m: number | undefined, y: number, timeStr: string | undefined;
 
-  // --- A. Explicit Continuous Date Range (e.g. "15-Aug-2026 to 19-Aug-2026", "from 15th August to 19th August 2026") ---
-  const formattedRangeRegex = /\b(\d{1,2})[-/]([a-z]{3}|\d{1,2})[-/](\d{2,4})\s*(?:to|-|until|through)\s*(\d{1,2})[-/]([a-z]{3}|\d{1,2})[-/](\d{2,4})\b/i;
-  const fRangeMatch = text.match(formattedRangeRegex);
-  if (fRangeMatch) {
-    const parsePart = (dayStr: string, monStr: string, yrStr: string) => {
-      let y = parseInt(yrStr, 10);
-      if (y < 100) y += 2000;
-      let m = isNaN(Number(monStr)) ? parseMonth(monStr) : parseInt(monStr, 10) - 1;
-      const d = parseInt(dayStr, 10);
-      if (m !== undefined && d >= 1 && d <= 31) return { y, m, d };
-      return null;
-    };
-    const s = parsePart(fRangeMatch[1], fRangeMatch[2], fRangeMatch[3]);
-    const e = parsePart(fRangeMatch[4], fRangeMatch[5], fRangeMatch[6]);
-    if (s && e) {
-      const sISO = toISO(s.y, s.m, s.d);
-      const eISO = toISO(e.y, e.m, e.d);
-      return {
-        startDate: sISO,
-        endDate: eISO,
-        date: sISO,
-        time,
-        isContinuousRange: true,
-        allDates: [sISO, eISO],
-        deadline: time ? `${eISO} at ${time}` : eISO,
-        status: calculateEventStatus(sISO, currentNow, eISO, true)
-      };
+      if (isNaN(Number(match[1])) && match[2]) {
+        // Month first
+        m = parseMonth(match[1]);
+        d = parseInt(match[2], 10);
+        y = match[3] ? parseInt(match[3], 10) : refYear;
+        timeStr = match[4];
+      } else if (match[1] && match[2] && isNaN(Number(match[2]))) {
+        // Day first
+        d = parseInt(match[1], 10);
+        m = parseMonth(match[2]);
+        y = match[3] ? parseInt(match[3], 10) : refYear;
+        timeStr = match[4];
+      } else {
+        // Formatted 20-Aug-2026
+        d = parseInt(match[1], 10);
+        m = isNaN(Number(match[2])) ? parseMonth(match[2]) : parseInt(match[2], 10) - 1;
+        let yPart = parseInt(match[3], 10);
+        if (yPart < 100) yPart += 2000;
+        y = yPart;
+        timeStr = match[4];
+      }
+
+      if (m !== undefined && d >= 1 && d <= 31) {
+        const iso = toISO(y, m, d);
+        // Extract local time ONLY within local context window
+        const localContext = text.substring(Math.max(0, match.index - 50), Math.min(text.length, match.index + match[0].length + 50));
+        const localTime = timeStr ? extractTimeFromText(timeStr) : extractTimeFromText(localContext);
+
+        let score = 100;
+        if (isSubject) score += 50; // Subject deadline gets highest priority (+150 total)
+        if (isQuoted) score -= 60;
+
+        candidates.push({
+          date: iso,
+          isDeadline: true,
+          isContinuousRange: false,
+          allDates: [iso],
+          time: localTime,
+          score,
+          sourceContext: match[0],
+          isSubject
+        });
+      }
     }
   }
 
-  const wordedRangeRegex = /\b(?:from\s+)?(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)?\s*(?:to|-|until|through)\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/i;
-  const wRangeMatch = text.match(wordedRangeRegex);
-  if (wRangeMatch && !text.includes('&') && !text.includes(',')) {
-    const dStart = parseInt(wRangeMatch[1], 10);
-    const mStartStr = wRangeMatch[2] || wRangeMatch[4];
-    const dEnd = parseInt(wRangeMatch[3], 10);
-    const mEndStr = wRangeMatch[4];
-    const y = wRangeMatch[5] ? parseInt(wRangeMatch[5], 10) : refDate.getFullYear();
+  // 2. Continuous Date Range (e.g. "15-Aug-2026 to 19-Aug-2026", "from 15th August to 19th August 2026")
+  const continuousRegexes = [
+    /\b(?:from\s+)?(\d{1,2})[-/]([a-z]{3}|\d{1,2})[-/](\d{2,4})\s*(?:to|-|until|through)\s*(\d{1,2})[-/]([a-z]{3}|\d{1,2})[-/](\d{2,4})\b/gi,
+    /\b(?:from\s+)?(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(?:to|-|until|through)\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/gi
+  ];
 
-    const mStart = parseMonth(mStartStr);
-    const mEnd = parseMonth(mEndStr);
+  for (const regex of continuousRegexes) {
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(text)) !== null) {
+      let sISO: string | null = null;
+      let eISO: string | null = null;
 
-    if (mStart !== undefined && mEnd !== undefined && dStart >= 1 && dStart <= 31 && dEnd >= 1 && dEnd <= 31) {
-      const sISO = toISO(y, mStart, dStart);
-      const eISO = toISO(y, mEnd, dEnd);
-      return {
-        startDate: sISO,
-        endDate: eISO,
-        date: sISO,
-        time,
-        isContinuousRange: true,
-        allDates: [sISO, eISO],
-        deadline: time ? `${eISO} at ${time}` : eISO,
-        status: calculateEventStatus(sISO, currentNow, eISO, true)
-      };
+      if (match.length >= 7 && match[6]) {
+        // Formatted 15-Aug-2026 to 19-Aug-2026
+        const d1 = parseInt(match[1], 10);
+        const m1 = isNaN(Number(match[2])) ? parseMonth(match[2]) : parseInt(match[2], 10) - 1;
+        let y1 = parseInt(match[3], 10);
+        if (y1 < 100) y1 += 2000;
+
+        const d2 = parseInt(match[4], 10);
+        const m2 = isNaN(Number(match[5])) ? parseMonth(match[5]) : parseInt(match[5], 10) - 1;
+        let y2 = parseInt(match[6], 10);
+        if (y2 < 100) y2 += 2000;
+
+        if (m1 !== undefined && m2 !== undefined && d1 >= 1 && d1 <= 31 && d2 >= 1 && d2 <= 31) {
+          sISO = toISO(y1, m1, d1);
+          eISO = toISO(y2, m2, d2);
+        }
+      } else {
+        // Worded 15th August to 19th August
+        const d1 = parseInt(match[1], 10);
+        const m1 = parseMonth(match[2]);
+        const d2 = parseInt(match[3], 10);
+        const m2 = parseMonth(match[4]);
+        const y = match[5] ? parseInt(match[5], 10) : refYear;
+
+        if (m1 !== undefined && m2 !== undefined && d1 >= 1 && d1 <= 31 && d2 >= 1 && d2 <= 31) {
+          sISO = toISO(y, m1, d1);
+          eISO = toISO(y, m2, d2);
+        }
+      }
+
+      if (sISO && eISO) {
+        const localContext = text.substring(Math.max(0, match.index - 50), Math.min(text.length, match.index + match[0].length + 50));
+        const localTime = extractTimeFromText(localContext);
+
+        let score = 85;
+        if (isSubject) score += 50;
+        if (isQuoted) score -= 60;
+
+        candidates.push({
+          date: sISO,
+          startDate: sISO,
+          endDate: eISO,
+          isContinuousRange: true,
+          allDates: [sISO, eISO],
+          time: localTime,
+          score,
+          sourceContext: match[0],
+          isSubject
+        });
+      }
     }
   }
 
-  // --- B. Discrete Multi-Date List (e.g. "12th, 24th & 25th August 2026") ---
-  const multiDayListRegex = /\b(\d{1,2})(?:st|nd|rd|th)?(?:\s*,\s*|\s+and\s+|\s*&\s*)(\d{1,2})(?:st|nd|rd|th)?(?:\s*,\s*|\s+and\s+|\s*&\s*)?(\d{1,2})?(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/i;
-  const multiListMatch = text.match(multiDayListRegex);
-  if (multiListMatch) {
-    const d1 = parseInt(multiListMatch[1], 10);
-    const d2 = parseInt(multiListMatch[2], 10);
-    const d3 = multiListMatch[3] ? parseInt(multiListMatch[3], 10) : undefined;
-    const m = parseMonth(multiListMatch[4]);
-    const y = multiListMatch[5] ? parseInt(multiListMatch[5], 10) : refDate.getFullYear();
+  // 3. Discrete Multi-Date Expression (e.g. "12th, 24th & 25th August 2026")
+  const multiDayListRegex = /\b(\d{1,2})(?:st|nd|rd|th)?(?:\s*,\s*|\s+and\s+|\s*&\s*)(\d{1,2})(?:st|nd|rd|th)?(?:\s*,\s*|\s+and\s+|\s*&\s*)?(\d{1,2})?(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/gi;
+  let mMatch: RegExpExecArray | null;
+  while ((mMatch = multiDayListRegex.exec(text)) !== null) {
+    const d1 = parseInt(mMatch[1], 10);
+    const d2 = parseInt(mMatch[2], 10);
+    const d3 = mMatch[3] ? parseInt(mMatch[3], 10) : undefined;
+    const m = parseMonth(mMatch[4]);
+    const y = mMatch[5] ? parseInt(mMatch[5], 10) : refYear;
 
     if (m !== undefined) {
       const dates: string[] = [];
@@ -238,174 +326,226 @@ export function parseDateFromEmailText(
 
       if (dates.length > 0) {
         dates.sort();
-        // The primary event date is the latest / upcoming one
         const primaryDate = dates[dates.length - 1];
-        return {
+        const localContext = text.substring(Math.max(0, mMatch.index - 50), Math.min(text.length, mMatch.index + mMatch[0].length + 50));
+        const localTime = extractTimeFromText(localContext);
+
+        let score = 75;
+        if (isSubject) score += 50;
+        if (isQuoted) score -= 60;
+
+        candidates.push({
           date: primaryDate,
           allDates: dates,
-          isContinuousRange: false, // NOT continuous!
-          time,
-          deadline: time ? `${primaryDate} at ${time}` : primaryDate,
-          status: calculateEventStatus(primaryDate, currentNow, undefined, false, dates)
-        };
+          isContinuousRange: false,
+          time: localTime,
+          score,
+          sourceContext: mMatch[0],
+          isSubject
+        });
       }
     }
   }
 
-  // --- C. Point-in-Time Deadlines (e.g. "Registration Deadline - 20th Aug 2026", "Deadline: Aug 20, 2026") ---
-  const deadlineRegex = /\b(?:deadline|last\s+date|submit\s+by|register\s+before|due\s+date|registration\s+closes|closes\s+on)\s*(?:-|:|\s+is|\s+on|\s+by)?\s*(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/i;
-  const deadlineMatch = text.match(deadlineRegex);
-  if (deadlineMatch) {
-    const d = parseInt(deadlineMatch[1], 10);
-    const m = parseMonth(deadlineMatch[2]);
-    const y = deadlineMatch[3] ? parseInt(deadlineMatch[3], 10) : refDate.getFullYear();
-    if (m !== undefined && d >= 1 && d <= 31) {
-      const dlISO = toISO(y, m, d);
-      return {
-        date: dlISO,
-        deadline: time ? `${dlISO} at ${time}` : dlISO,
-        isDeadline: true,
-        isContinuousRange: false,
-        allDates: [dlISO],
-        time,
-        status: calculateEventStatus(dlISO, currentNow)
-      };
+  // 4. Standard Single Specific Dates (e.g. "21st August 2026", "Aug 21, 2026", "21-Aug-2026")
+  const singleRegexes = [
+    /\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/gi,
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/gi,
+    /\b(\d{1,2})[-/]([a-z]{3})[-/](\d{2,4})\b/gi
+  ];
+
+  for (const regex of singleRegexes) {
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(text)) !== null) {
+      let d: number, m: number | undefined, y: number;
+
+      if (isNaN(Number(match[1])) && match[2]) {
+        m = parseMonth(match[1]);
+        d = parseInt(match[2], 10);
+        y = match[3] ? parseInt(match[3], 10) : refYear;
+      } else if (match[1] && isNaN(Number(match[2]))) {
+        d = parseInt(match[1], 10);
+        m = parseMonth(match[2]);
+        let yPart = match[3] ? parseInt(match[3], 10) : refYear;
+        if (yPart < 100) yPart += 2000;
+        y = yPart;
+      } else {
+        continue;
+      }
+
+      if (m !== undefined && d >= 1 && d <= 31) {
+        const iso = toISO(y, m, d);
+        const localContext = text.substring(Math.max(0, match.index - 60), Math.min(text.length, match.index + match[0].length + 60));
+        const localTime = extractTimeFromText(localContext);
+
+        // Contextual semantic scoring for single date
+        let score = 50;
+        const lowerCtx = localContext.toLowerCase();
+
+        if (/\b(assessment|test|exam|interview|coding\s+round|slot)\b/i.test(lowerCtx)) {
+          score += 25; // Scheduled test/assessment (+75)
+        } else if (/\b(scheduled\s+on|held\s+on|taking\s+place\s+on)\b/i.test(lowerCtx)) {
+          score += 15; // Scheduled event (+65)
+        } else if (/\b(live\s+from|registration\s+open|opened\s+on|starts\s+on)\b/i.test(lowerCtx)) {
+          score += 5; // Registration opening date (lower priority)
+        }
+
+        if (isSubject) score += 50;
+        if (isQuoted) score -= 60;
+
+        candidates.push({
+          date: iso,
+          allDates: [iso],
+          isContinuousRange: false,
+          time: localTime,
+          score,
+          sourceContext: match[0],
+          isSubject
+        });
+      }
     }
   }
 
-  // --- D. Standard Single Specific Date (e.g. "15th August 2026", "August 15, 2026") ---
-  const singleDateRegex1 = /\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/i;
-  const sMatch1 = text.match(singleDateRegex1);
-  if (sMatch1) {
-    const day = parseInt(sMatch1[1], 10);
-    const m = parseMonth(sMatch1[2]);
-    const y = sMatch1[3] ? parseInt(sMatch1[3], 10) : refDate.getFullYear();
-    if (m !== undefined && day >= 1 && day <= 31) {
-      const singleISO = toISO(y, m, day);
-      return {
-        date: singleISO,
-        time,
-        allDates: [singleISO],
-        deadline: time ? `${singleISO} at ${time}` : singleISO,
-        status: calculateEventStatus(singleISO, currentNow)
-      };
+  return candidates;
+}
+
+/**
+ * Context-aware, semantic date extractor for emails.
+ */
+export function parseDateFromEmailText(
+  subjectOrCombinedText: string,
+  bodyOrTimestamp?: string | number | Date,
+  timestampOrNow?: number | Date,
+  optionalNow?: Date
+): ParsedDateResult {
+  let subject = '';
+  let body = '';
+  let emailTimestamp: number = Date.now();
+  let currentNow: Date = new Date();
+
+  // Handle signature variations
+  if (typeof bodyOrTimestamp === 'string') {
+    subject = subjectOrCombinedText;
+    body = bodyOrTimestamp;
+    if (typeof timestampOrNow === 'number' || timestampOrNow instanceof Date) {
+      emailTimestamp = new Date(timestampOrNow).getTime();
+    }
+    if (optionalNow instanceof Date) {
+      currentNow = optionalNow;
+    }
+  } else {
+    // Single text passed in (e.g. combined text)
+    const split = subjectOrCombinedText.split('\n\n');
+    subject = split[0] || '';
+    body = split.slice(1).join('\n\n');
+    if (typeof bodyOrTimestamp === 'number' || bodyOrTimestamp instanceof Date) {
+      emailTimestamp = new Date(bodyOrTimestamp).getTime();
+    }
+    if (timestampOrNow instanceof Date) {
+      currentNow = timestampOrNow;
     }
   }
 
-  const singleDateRegex2 = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/i;
-  const sMatch2 = text.match(singleDateRegex2);
-  if (sMatch2) {
-    const m = parseMonth(sMatch2[1]);
-    const day = parseInt(sMatch2[2], 10);
-    const y = sMatch2[3] ? parseInt(sMatch2[3], 10) : refDate.getFullYear();
-    if (m !== undefined && day >= 1 && day <= 31) {
-      const singleISO = toISO(y, m, day);
+  const refDate = new Date(emailTimestamp);
+  const refYear = refDate.getFullYear() || currentNow.getFullYear();
+
+  const { primary: primaryBody, quoted: quotedBody } = cleanEmailBody(body);
+
+  // Extract candidate dates from Subject, Primary Body, and Quoted Body
+  const subjectCandidates = extractCandidatesFromSection(subject, true, false, refYear);
+  const bodyCandidates = extractCandidatesFromSection(primaryBody, false, false, refYear);
+  const quotedCandidates = extractCandidatesFromSection(quotedBody, false, true, refYear);
+
+  const allCandidates = [...subjectCandidates, ...bodyCandidates, ...quotedCandidates];
+
+  if (allCandidates.length === 0) {
+    // Fallback relative checks
+    const lower = `${subject} ${primaryBody}`.toLowerCase();
+    if (/\b(today|tonight)\b/i.test(lower)) {
+      const t = toDateString(refDate);
       return {
-        date: singleISO,
-        time,
-        allDates: [singleISO],
-        deadline: time ? `${singleISO} at ${time}` : singleISO,
-        status: calculateEventStatus(singleISO, currentNow)
+        date: t,
+        allDates: [t],
+        deadline: t,
+        status: calculateEventStatus(t, currentNow)
       };
     }
-  }
-
-  // --- E. Standard Formatted Date (e.g. "15-Aug-2026" or "2026-08-15") ---
-  const isoMatch = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (isoMatch) {
-    const isoDateStr = `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-    return {
-      date: isoDateStr,
-      time,
-      allDates: [isoDateStr],
-      deadline: time ? `${isoDateStr} at ${time}` : isoDateStr,
-      status: calculateEventStatus(isoDateStr, currentNow)
-    };
-  }
-
-  // --- F. Relative Dates in Email Body (e.g. "today", "tomorrow", "next Monday") ---
-  if (/\b(today|tonight)\b/i.test(lower)) {
-    const todayStr = toDateString(refDate);
-    return {
-      date: todayStr,
-      time,
-      allDates: [todayStr],
-      deadline: time ? `${todayStr} at ${time}` : todayStr,
-      status: calculateEventStatus(todayStr, currentNow)
-    };
-  }
-
-  if (/\b(tomorrow)\b/i.test(lower)) {
-    const d = new Date(refDate);
-    d.setDate(d.getDate() + 1);
-    const tomStr = toDateString(d);
-    return {
-      date: tomStr,
-      time,
-      allDates: [tomStr],
-      deadline: time ? `${tomStr} at ${time}` : tomStr,
-      status: calculateEventStatus(tomStr, currentNow)
-    };
-  }
-
-  if (/\bday after tomorrow\b/i.test(lower)) {
-    const d = new Date(refDate);
-    d.setDate(d.getDate() + 2);
-    const datStr = toDateString(d);
-    return {
-      date: datStr,
-      time,
-      allDates: [datStr],
-      deadline: time ? `${datStr} at ${time}` : datStr,
-      status: calculateEventStatus(datStr, currentNow)
-    };
-  }
-
-  const weekdayRegex = /\b(?:this\s+|next\s+|on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
-  const wm = lower.match(weekdayRegex);
-  if (wm) {
-    const targetDayIndex = DAY_OF_WEEK_MAP[wm[1]];
-    if (targetDayIndex !== undefined) {
-      const resolvedDate = new Date(refDate);
-      let diff = targetDayIndex - refDate.getDay();
-      if (diff <= 0) diff += 7;
-      resolvedDate.setDate(resolvedDate.getDate() + diff);
-      const wdStr = toDateString(resolvedDate);
+    if (/\b(tomorrow)\b/i.test(lower)) {
+      const d = new Date(refDate);
+      d.setDate(d.getDate() + 1);
+      const tom = toDateString(d);
       return {
-        date: wdStr,
-        time,
-        allDates: [wdStr],
-        deadline: time ? `${wdStr} at ${time}` : wdStr,
-        status: calculateEventStatus(wdStr, currentNow)
+        date: tom,
+        allDates: [tom],
+        deadline: tom,
+        status: calculateEventStatus(tom, currentNow)
       };
     }
+    return { status: 'unknown' };
   }
 
+  // Sort candidates by score descending
+  allCandidates.sort((a, b) => b.score - a.score);
+
+  const winner = allCandidates[0];
+
+  // If winner is a continuous window
+  if (winner.isContinuousRange && winner.startDate && winner.endDate) {
+    return {
+      startDate: winner.startDate,
+      endDate: winner.endDate,
+      date: winner.startDate,
+      isContinuousRange: true,
+      allDates: [winner.startDate, winner.endDate],
+      time: winner.time,
+      deadline: winner.time ? `${winner.endDate} at ${winner.time}` : winner.endDate,
+      status: calculateEventStatus(winner.startDate, currentNow, winner.endDate, true)
+    };
+  }
+
+  // If winner is an explicit deadline
+  if (winner.isDeadline) {
+    return {
+      date: winner.date,
+      deadline: winner.time ? `${winner.date} at ${winner.time}` : winner.date,
+      isDeadline: true,
+      isContinuousRange: false,
+      allDates: [winner.date],
+      time: winner.time,
+      status: calculateEventStatus(winner.date, currentNow)
+    };
+  }
+
+  // If winner has discrete dates list
+  if (winner.allDates && winner.allDates.length > 1) {
+    return {
+      date: winner.date,
+      allDates: winner.allDates,
+      isContinuousRange: false,
+      time: winner.time,
+      deadline: winner.time ? `${winner.date} at ${winner.time}` : winner.date,
+      status: calculateEventStatus(winner.date, currentNow, undefined, false, winner.allDates)
+    };
+  }
+
+  // Standard single scheduled date
   return {
-    time,
-    status: 'unknown'
+    date: winner.date,
+    allDates: [winner.date],
+    isContinuousRange: false,
+    time: winner.time,
+    deadline: winner.time ? `${winner.date} at ${winner.time}` : winner.date,
+    status: calculateEventStatus(winner.date, currentNow)
   };
 }
 
 /**
  * Parses user natural language query to determine target date range.
- * 
- * Explicitly handles:
- * - "today and tomorrow", "today & tomorrow", "today, tomorrow", "today or tomorrow" -> [today, tomorrow]
- * - "today", "due today", "today's schedule" -> [today, today]
- * - "tomorrow", "due tomorrow", "tomorrow's schedule" -> [tomorrow, tomorrow]
- * - "from 15th august to 20th august" -> [2026-08-15, 2026-08-20]
- * - "between 15 aug and 20 aug"
- * - "on 17th august" -> [2026-08-17, 2026-08-17]
  */
 export function parseQueryDateRange(query: string, referenceDate: Date = new Date()): DateRangeQuery {
   const text = query.trim();
   const lower = text.toLowerCase();
   const refYear = referenceDate.getFullYear();
-
-  const parseMonth = (mStr: string): number | undefined => {
-    return MONTH_MAP[mStr.toLowerCase().substring(0, 3)];
-  };
 
   const todayStr = toDateString(referenceDate);
   const tomorrowDate = new Date(referenceDate);
@@ -431,7 +571,7 @@ export function parseQueryDateRange(query: string, referenceDate: Date = new Dat
   }
 
   // 2. Explicit range: "from 15th august to 20th august" or "between 15 aug and 20 aug" or "15 to 20 august"
-  const rangePattern1 = /\b(?:from|between)?\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)?\s*(?:to|and|-|until)\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/i;
+  const rangePattern1 = /\b(?:from|between)?\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(?:to|and|-|until)\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(\d{4}))?\b/i;
   const m1 = text.match(rangePattern1);
   if (m1) {
     const dStart = parseInt(m1[1], 10);

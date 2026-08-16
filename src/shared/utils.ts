@@ -1,3 +1,5 @@
+import { ExtractedEvent } from '../types/events';
+
 /**
  * Utility functions for date formatting, ID generation, text sanitization, URL normalization, and Gmail navigation.
  */
@@ -16,6 +18,8 @@ export function getTodayDateString(date: Date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 /**
  * Formats an ISO date string or Date object into human-readable date.
  * e.g., "Aug 15, 2026" or "Today, 11:59 PM" or "Aug 15–19, 2026"
@@ -28,22 +32,20 @@ export function formatHumanDate(
 ): string {
   if (!dateStr) return timeStr ? `At ${timeStr}` : 'Date not specified';
 
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
   try {
     const [year, month, day] = dateStr.split('-').map(Number);
     if (!year || !month || !day) return dateStr;
 
-    const formattedStartDate = `${monthNames[month - 1]} ${day}`;
+    const formattedStartDate = `${MONTH_NAMES[month - 1]} ${day}`;
 
     // If explicit continuous range (e.g. Aug 15–19, 2026)
     if (isContinuousRange && endDateStr && endDateStr !== dateStr) {
       const [eYear, eMonth, eDay] = endDateStr.split('-').map(Number);
       if (eYear && eMonth && eDay) {
         if (month === eMonth) {
-          return `${monthNames[month - 1]} ${day}–${eDay}, ${year}${timeStr ? ` at ${timeStr}` : ''}`;
+          return `${MONTH_NAMES[month - 1]} ${day} to ${MONTH_NAMES[month - 1]} ${eDay}, ${year}${timeStr ? ` at ${timeStr}` : ''}`;
         }
-        return `${formattedStartDate} – ${monthNames[eMonth - 1]} ${eDay}, ${eYear}${timeStr ? ` at ${timeStr}` : ''}`;
+        return `${formattedStartDate} to ${MONTH_NAMES[eMonth - 1]} ${eDay}, ${eYear}${timeStr ? ` at ${timeStr}` : ''}`;
       }
     }
 
@@ -56,7 +58,7 @@ export function formatHumanDate(
 
     const diffDays = Math.round((targetMidnight.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
-    const formattedFullDate = `${monthNames[month - 1]} ${day}, ${year}`;
+    const formattedFullDate = `${MONTH_NAMES[month - 1]} ${day}, ${year}`;
 
     let relativeLabel = '';
     if (diffDays === 0) relativeLabel = 'Today';
@@ -75,6 +77,50 @@ export function formatHumanDate(
   } catch {
     return dateStr;
   }
+}
+
+/**
+ * Returns a complete semantic description of the event's date/schedule for cards.
+ */
+export function formatEventSemanticDate(event: ExtractedEvent): string {
+  const formatIsoDateClean = (iso: string) => {
+    const parts = iso.split('-').map(Number);
+    if (!parts[0] || !parts[1] || !parts[2]) return iso;
+    return `${MONTH_NAMES[parts[1] - 1]} ${parts[2]}, ${parts[0]}`;
+  };
+
+  // 1. Point-in-time deadline
+  if (event.isDeadline || event.deadline) {
+    const rawDate = (event.deadline || event.date || '').split(' ')[0];
+    const dateStr = formatIsoDateClean(rawDate);
+    const timeStr = event.time ? ` at ${event.time}` : '';
+    const isReg = event.type === 'registration' || event.title.toLowerCase().includes('register');
+    return `${isReg ? 'Registration Deadline' : 'Deadline'}: ${dateStr}${timeStr}`;
+  }
+
+  // 2. Continuous window
+  if (event.isContinuousRange && event.startDate && event.endDate) {
+    return `Test window: ${formatHumanDate(event.startDate, undefined, event.endDate, true)}`;
+  }
+
+  // 3. Discrete multi-dates list
+  if (event.allDates && event.allDates.length > 1) {
+    const formatted = event.allDates.map(d => {
+      const parts = d.split('-').map(Number);
+      return parts[1] && parts[2] ? `${MONTH_NAMES[parts[1] - 1]} ${parts[2]}` : d;
+    }).join(', ');
+    return `Dates: ${formatted}`;
+  }
+
+  // 4. Single scheduled event
+  const singleDate = event.date || event.startDate;
+  if (singleDate) {
+    const dateFormatted = formatIsoDateClean(singleDate);
+    const timeStr = event.time ? ` at ${event.time}` : '';
+    return `Scheduled for ${dateFormatted}${timeStr}`;
+  }
+
+  return 'Date not specified';
 }
 
 /**

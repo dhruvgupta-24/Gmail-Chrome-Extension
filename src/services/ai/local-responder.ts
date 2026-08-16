@@ -1,6 +1,7 @@
 import { ExtractedEvent, DateRangeQuery } from '../../types/events';
 import { parseQueryDateRange, toDateString, parseISODate } from '../extraction/date-parser';
 import { deduplicateEvents } from '../../storage/local-search';
+import { QueryConstraints, parseQueryConstraints } from '../retrieval/intent';
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -45,7 +46,7 @@ function getBestActionLink(links: ExtractedEvent['links']): { label: string; url
     const u = l.url.toLowerCase();
     const lbl = l.label.toLowerCase();
     return !['instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'youtube.com', 'linkedin.com/company'].some(s => u.includes(s)) &&
-           !['instagram', 'facebook', 'twitter', 'youtube', 'linkedin'].includes(lbl);
+           !['instagram', 'facebook', 'twitter', 'youtube', 'linkedin', 'unsubscribe', 'website'].includes(lbl);
   });
   return valid.length > 0 ? valid[0] : null;
 }
@@ -108,6 +109,107 @@ function summarizeEventNaturally(ev: ExtractedEvent, context: 'today' | 'tomorro
 }
 
 /**
+ * Formats a clean, direct answer for an entity-specific query (e.g. "do i have infoedge test today?").
+ */
+function formatEntitySpecificResponse(
+  constraints: QueryConstraints,
+  events: ExtractedEvent[],
+  _nowDate: Date,
+  matchedOnRequestedDate?: boolean
+): string {
+  const entityDisplay = constraints.rawEntity
+    ? constraints.rawEntity.charAt(0).toUpperCase() + constraints.rawEntity.slice(1)
+    : (constraints.entityQuery || 'the requested');
+
+  const eventTypeDisplay = constraints.eventType && constraints.eventType !== 'any'
+    ? constraints.eventType
+    : 'event';
+
+  // Scenario 1: No matching event for this entity at all
+  if (events.length === 0) {
+    if (constraints.questionType === 'existence') {
+      const timeContext = constraints.dateRange?.label ? ` ${constraints.dateRange.label.toLowerCase()}` : '';
+      return `No. I couldn't find any **${entityDisplay}** ${eventTypeDisplay} in your indexed emails${timeContext}.`;
+    }
+    return `I couldn't find any **${entityDisplay}** ${eventTypeDisplay} or schedule in your indexed emails.`;
+  }
+
+  const primaryEvent = events[0];
+  const bestLink = getBestActionLink(primaryEvent.links);
+  const linkStr = bestLink ? ` [${bestLink.label}](${bestLink.url})` : '';
+
+  // Extract human date & time representation
+  const targetDateStr = primaryEvent.date || primaryEvent.startDate;
+  const timeStr = primaryEvent.time ? ` at ${primaryEvent.time}` : '';
+  const dateFormatted = targetDateStr ? formatMonthDay(targetDateStr) : '';
+
+  // Build operational action details (e.g. "The test will be active between 4 pm - 5:30 pm. Link will be shared by 3:50PM.")
+  let actionDetails = '';
+  if (primaryEvent.actionDescription && !primaryEvent.actionDescription.startsWith('Action required')) {
+    actionDetails = ` ${primaryEvent.actionDescription}`;
+  }
+
+  // Multi-date discrete string
+  let multiDateStr = '';
+  if (primaryEvent.allDates && primaryEvent.allDates.length > 1) {
+    const formattedDates = primaryEvent.allDates.map(d => formatMonthDay(d));
+    multiDateStr = ` (${formattedDates.join(', ')})`;
+  }
+
+  // Scenario 2: Existence question with requested date (e.g. "do i have infoedge test today?")
+  if (constraints.questionType === 'existence' && constraints.dateRange) {
+    const requestedLabel = constraints.dateRange.label || 'today';
+
+    if (matchedOnRequestedDate === true) {
+      // YES MATCH
+      if (primaryEvent.isContinuousRange && primaryEvent.endDate) {
+        return `Yes. The **${primaryEvent.title}** test window is open today and remains active until ${formatMonthDay(primaryEvent.endDate)}.${actionDetails}${linkStr}`;
+      }
+      if (primaryEvent.isDeadline) {
+        return `Yes. The deadline for **${primaryEvent.title}** is today${timeStr}.${actionDetails}${linkStr}`;
+      }
+      return `Yes. You have an **${primaryEvent.title}** ${requestedLabel.toLowerCase()}${timeStr}.${actionDetails}${linkStr}`;
+    } else {
+      // NO MATCH ON REQUESTED DATE, but upcoming event exists
+      const upcomingDateFormatted = targetDateStr ? formatMonthDay(targetDateStr) : '';
+      if (primaryEvent.isContinuousRange && primaryEvent.startDate && primaryEvent.endDate) {
+        return `No. You don't have a ${entityDisplay} ${eventTypeDisplay} ${requestedLabel.toLowerCase()}. The **${primaryEvent.title}** test window runs from ${formatMonthDay(primaryEvent.startDate)} to ${formatMonthDay(primaryEvent.endDate)}.${actionDetails}${linkStr}`;
+      }
+      if (primaryEvent.isDeadline) {
+        return `No. You don't have a ${entityDisplay} deadline ${requestedLabel.toLowerCase()}. The deadline for **${primaryEvent.title}** is ${upcomingDateFormatted}${timeStr}.${actionDetails}${linkStr}`;
+      }
+      return `No. You don't have an ${entityDisplay} ${eventTypeDisplay} scheduled for ${requestedLabel.toLowerCase()}. Your next **${primaryEvent.title}** is scheduled for ${upcomingDateFormatted}${timeStr}${multiDateStr}.${actionDetails}${linkStr}`;
+    }
+  }
+
+  // Scenario 3: Time query (e.g. "when is my idfc test?", "when is the infoedge test?")
+  if (constraints.questionType === 'time_query') {
+    if (primaryEvent.isContinuousRange && primaryEvent.startDate && primaryEvent.endDate) {
+      return `The test window for **${primaryEvent.title}** is open from ${formatMonthDay(primaryEvent.startDate)} to ${formatMonthDay(primaryEvent.endDate)}.${actionDetails}${linkStr}`;
+    }
+    if (primaryEvent.isDeadline) {
+      return `The registration/submission deadline for **${primaryEvent.title}** is ${dateFormatted}${timeStr}.${actionDetails}${linkStr}`;
+    }
+    if (primaryEvent.allDates && primaryEvent.allDates.length > 1) {
+      const dates = primaryEvent.allDates.map(d => formatMonthDay(d)).join(', ');
+      return `The **${primaryEvent.title}** is scheduled across: ${dates}${timeStr}.${actionDetails}${linkStr}`;
+    }
+    return `Your **${primaryEvent.title}** is scheduled for ${dateFormatted}${timeStr}.${actionDetails}${linkStr}`;
+  }
+
+  // Scenario 4: Link query (e.g. "where is the idfc link?")
+  if (constraints.questionType === 'link_query') {
+    if (bestLink) {
+      return `Here is the link for **${primaryEvent.title}**: [${bestLink.label}](${bestLink.url}).`;
+    }
+    return `No direct test link was found in the email for **${primaryEvent.title}**. ${actionDetails || 'Please check the original email.'}`;
+  }
+
+  // Fallback: Default Entity summary
+  return `### ${primaryEvent.title}\n- **Organization:** ${primaryEvent.company || primaryEvent.organization || entityDisplay}\n- **Schedule:** ${dateFormatted || 'Unspecified'}${timeStr}${multiDateStr}\n${actionDetails ? `- **Details:** ${actionDetails}\n` : ''}${bestLink ? `- **Link:** [${bestLink.label}](${bestLink.url})\n` : ''}`.trim();
+}
+
+/**
  * Generates an instantaneous, natural, Shortwave-style response from local extracted events.
  */
 export function generateLocalDeterministicResponse(
@@ -115,13 +217,21 @@ export function generateLocalDeterministicResponse(
   events: ExtractedEvent[],
   nowDate: Date = new Date(),
   detectedRange?: DateRangeQuery,
-  allIndexedEvents?: ExtractedEvent[]
+  allIndexedEvents?: ExtractedEvent[],
+  constraintsInput?: QueryConstraints,
+  matchedOnRequestedDate?: boolean
 ): string {
   const lower = query.toLowerCase();
-  const dateRange = detectedRange || parseQueryDateRange(query, nowDate);
+  const constraints = constraintsInput || parseQueryConstraints(query, nowDate);
   const dedupedEvents = deduplicateEvents(events);
 
-  // 1. "Today and Tomorrow" Query (e.g. "what all do i have today and tomorrow?")
+  // 1. HIGHEST PRIORITY: Entity-Specific Queries (e.g. "do i have idfc test today?")
+  if (constraints.isEntitySpecific) {
+    return formatEntitySpecificResponse(constraints, dedupedEvents, nowDate, matchedOnRequestedDate);
+  }
+
+  // 2. "Today and Tomorrow" Query (e.g. "what all do i have today and tomorrow?")
+  const dateRange = detectedRange || constraints.dateRange || parseQueryDateRange(query, nowDate);
   if (dateRange.isDateQuery && dateRange.isTodayAndTomorrow) {
     const todayStr = toDateString(nowDate);
     const tomDate = new Date(nowDate);
@@ -143,7 +253,7 @@ export function generateLocalDeterministicResponse(
       (e.isContinuousRange && e.startDate === tomStr)
     );
 
-    // Continuous windows that are active today AND continue tomorrow (do NOT repeat as duplicate entry!)
+    // Continuous windows that are active today AND continue tomorrow
     const continuingWindows = dedupedEvents.filter(e =>
       e.isContinuousRange &&
       e.startDate && e.endDate &&
@@ -181,7 +291,7 @@ export function generateLocalDeterministicResponse(
       res += `- Nothing specifically scheduled for tomorrow.\n`;
     }
 
-    // --- COMING UP SOON SECTION (Look ahead in next 7 days if available) ---
+    // --- COMING UP SOON SECTION ---
     const upcomingPool = allIndexedEvents || dedupedEvents;
     const futureLimit = new Date(nowDate);
     futureLimit.setDate(futureLimit.getDate() + 7);
@@ -189,7 +299,6 @@ export function generateLocalDeterministicResponse(
 
     const comingSoon = deduplicateEvents(upcomingPool).filter(e => {
       const d = e.startDate || e.date || (e.deadline ? e.deadline.split(' ')[0] : '');
-      // Must be after tomorrow and within 7 days
       return d > tomStr && d <= futureLimitStr && !todayActive.some(t => t.id === e.id);
     });
 
@@ -203,7 +312,7 @@ export function generateLocalDeterministicResponse(
     return res.trim();
   }
 
-  // 2. Specific Single-Day / Date Range Query
+  // 3. Specific Single-Day / Date Range Query (Broad/Non-entity)
   if (dateRange.isDateQuery && dateRange.startDate && dateRange.endDate) {
     if (dateRange.label === 'Today') {
       if (dedupedEvents.length === 0) {
@@ -240,7 +349,7 @@ export function generateLocalDeterministicResponse(
     return res.trim();
   }
 
-  // 3. Tests & Assessments Query
+  // 4. Tests & Assessments Generic Query
   if (lower.includes('test') || lower.includes('quiz') || lower.includes('exam') || lower.includes('assessment')) {
     if (dedupedEvents.length === 0) {
       return 'No upcoming tests or assessments found in your indexed emails.';
@@ -252,7 +361,7 @@ export function generateLocalDeterministicResponse(
     return res.trim();
   }
 
-  // 6. General listing
+  // 5. General listing
   if (dedupedEvents.length === 0) {
     return 'I searched your indexed mailbox and found no relevant upcoming deadlines or tests matching this request.';
   }

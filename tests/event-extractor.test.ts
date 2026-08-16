@@ -29,13 +29,14 @@ describe('Event Extractor & Deduplication', () => {
     expect(detectEventType('Google Coding Round 1', 'Your test will start on HackerRank')).toBe('coding_round');
   });
 
-  it('detects action required phrases', () => {
+  it('detects action required phrases and operational instructions', () => {
     const { actionRequired, actionDescription } = detectActionRequired(
-      'Urgent: Register for Campus Drive',
-      'Please fill the form before 11:59 PM today.'
+      'Infoedge Online Test',
+      'Test will be active between 4 pm - 5:30 pm. Link will be shared by 3:50PM.'
     );
     expect(actionRequired).toBe(true);
-    expect(actionDescription).toBeDefined();
+    expect(actionDescription).toContain('4 pm - 5:30 pm');
+    expect(actionDescription).toContain('3:50PM');
   });
 
   it('CASE 6: Deduplicates "Destination Dr. Reddy\'s 3.0 is LIVE" and "Fwd: Destination Dr. Reddy\'s 3.0..." into ONE event', () => {
@@ -57,7 +58,7 @@ describe('Event Extractor & Deduplication', () => {
 
     const email2: ParsedEmailMessage = {
       id: 'msg-dr2',
-      threadId: 'th-dr2', // Different thread ID (e.g. forward from placement officer)
+      threadId: 'th-dr2',
       subject: "Fwd: Destination Dr. Reddy's 3.0 is LIVE - Campus Engagement",
       sender: 'Placement Officer <tnp@univ.edu>',
       senderName: 'Placement Cell',
@@ -75,40 +76,40 @@ describe('Event Extractor & Deduplication', () => {
     const ev2 = extractEventFromEmail(email2, fixedNow)!;
 
     const deduped = deduplicateEvents([ev1, ev2]);
-    expect(deduped.length).toBe(1); // Must consolidate into exactly ONE event
-    expect(deduped[0].sourceMessages.length).toBe(2); // Both emails tracked
+    expect(deduped.length).toBe(1);
+    expect(deduped[0].sourceMessages.length).toBe(2);
   });
 
-  it('CASE 7: Deduplicates two copies of "IDFC First Bank - Online Test Credentials" into ONE event', () => {
+  it('TEST G & Process Merging: Merges Infoedge initial process email and subsequent timing update email into one rich event', () => {
     const email1: ParsedEmailMessage = {
-      id: 'msg-idfc1',
-      threadId: 'th-idfc1',
-      subject: 'IDFC First Bank - Online Test Credentials',
-      sender: 'Hiring Team <hiring@idfcfirstbank.com>',
-      senderName: 'IDFC First Bank',
-      senderEmail: 'hiring@idfcfirstbank.com',
-      recipient: 'student@univ.edu',
-      date: '2026-08-14T08:00:00Z',
-      timestamp: new Date('2026-08-14T08:00:00Z').getTime(),
-      snippet: 'Your test credentials for IDFC First Bank OA',
-      plainText: 'Online test will be on 16th August 2026 at 10:00 AM. Link: https://assessment.idfc.com',
-      links: [{ text: 'Take Test', href: 'https://assessment.idfc.com' }],
+      id: 'msg-info1',
+      threadId: 'th-infoedge',
+      subject: 'Campus Details | Infoedge India Ltd. | 14th & 16th August 2026',
+      sender: 'Placement Team <placements@univ.edu>',
+      senderName: 'Placement Team',
+      senderEmail: 'placements@univ.edu',
+      recipient: 'students@univ.edu',
+      date: '2026-08-13T08:00:00Z',
+      timestamp: new Date('2026-08-13T08:00:00Z').getTime(),
+      snippet: 'Infoedge hiring process schedule',
+      plainText: 'Process: PPT — Aug 14, Technical Assessment — Aug 16, Sunday, 4:00 PM',
+      links: [],
       labels: ['INBOX']
     };
 
     const email2: ParsedEmailMessage = {
-      id: 'msg-idfc2',
-      threadId: 'th-idfc2',
-      subject: 'IDFC First Bank - Online Test Credentials (Reminder)',
-      sender: 'Hiring Team <hiring@idfcfirstbank.com>',
-      senderName: 'IDFC First Bank',
-      senderEmail: 'hiring@idfcfirstbank.com',
-      recipient: 'student@univ.edu',
-      date: '2026-08-15T06:00:00Z',
-      timestamp: new Date('2026-08-15T06:00:00Z').getTime(),
-      snippet: 'Reminder: test credentials for IDFC First Bank OA',
-      plainText: 'Online test will be on 16th August 2026 at 10:00 AM. Link: https://assessment.idfc.com',
-      links: [{ text: 'Take Test', href: 'https://assessment.idfc.com' }],
+      id: 'msg-info2',
+      threadId: 'th-infoedge',
+      subject: 'Infoedge Technical Assessment Timing & Instructions',
+      sender: 'Placement Team <placements@univ.edu>',
+      senderName: 'Placement Team',
+      senderEmail: 'placements@univ.edu',
+      recipient: 'students@univ.edu',
+      date: '2026-08-15T08:00:00Z',
+      timestamp: new Date('2026-08-15T08:00:00Z').getTime(),
+      snippet: 'Important test instructions for Infoedge',
+      plainText: 'Test will be active between 4 pm - 5:30 pm. Link will be shared by 3:50PM. Link: https://assessment.infoedge.com',
+      links: [{ text: 'Assessment Portal', href: 'https://assessment.infoedge.com' }],
       labels: ['INBOX']
     };
 
@@ -116,7 +117,13 @@ describe('Event Extractor & Deduplication', () => {
     const ev2 = extractEventFromEmail(email2, fixedNow)!;
 
     const deduped = deduplicateEvents([ev1, ev2]);
-    expect(deduped.length).toBe(1); // Exactly ONE event
-    expect(deduped[0].sourceMessages.length).toBe(2);
+    expect(deduped.length).toBe(1);
+
+    const merged = deduped[0];
+    expect(merged.company).toBe('Infoedge India Ltd.');
+    expect(merged.sourceMessages.length).toBe(2);
+    expect(merged.actionDescription).toContain('4 pm - 5:30 pm');
+    expect(merged.actionDescription).toContain('3:50PM');
+    expect(merged.links.some(l => l.url.includes('assessment.infoedge.com'))).toBe(true);
   });
 });

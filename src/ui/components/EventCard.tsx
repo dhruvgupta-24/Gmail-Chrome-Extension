@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ExtractedEvent } from '../../types/events';
-import { formatHumanDate, openGmailMessageInCurrentTab } from '../../shared/utils';
+import { formatEventSemanticDate, openGmailMessageInCurrentTab } from '../../shared/utils';
 import {
   ExternalLink,
   Mail,
@@ -69,14 +69,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
     }
   };
 
-  // Filter out irrelevant social media links from action links
-  const actionableLinks = event.links.filter(l => {
-    const u = l.url.toLowerCase();
-    const lbl = l.label.toLowerCase();
-    return !['instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'youtube.com', 'linkedin.com/company'].some(s => u.includes(s)) &&
-           !['instagram', 'facebook', 'twitter', 'youtube', 'linkedin'].includes(lbl);
-  });
-
+  const actionableLinks = event.links || [];
   const primarySource = event.sourceMessages[0];
 
   const handleOpenEmail = (e: React.MouseEvent) => {
@@ -107,28 +100,28 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
       </div>
 
       {/* Title */}
-      <h3 className="text-sm font-medium text-slate-900 dark:text-slate-100 leading-snug line-clamp-2">
+      <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100 leading-snug line-clamp-2">
         {event.title}
       </h3>
 
-      {/* Meta: Organization & Date */}
-      <div className="mt-2 space-y-1 text-xs text-slate-500 dark:text-slate-400">
+      {/* Meta: Organization & Semantic Date */}
+      <div className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">
         {event.organization && (
           <div className="flex items-center gap-1.5">
             <Building2 className="w-3.5 h-3.5 shrink-0 text-slate-400" />
-            <span className="truncate">{event.organization}</span>
+            <span className="truncate font-medium">{event.organization}</span>
           </div>
         )}
 
         <div className="flex items-center gap-1.5">
           <Clock className="w-3.5 h-3.5 shrink-0 text-slate-400" />
-          <span>{formatHumanDate(event.date || event.startDate, event.time, event.endDate, event.isContinuousRange)}</span>
+          <span className="font-medium">{formatEventSemanticDate(event)}</span>
         </div>
       </div>
 
       {/* Action required description if present */}
       {event.actionDescription && (
-        <div className="mt-2 text-xs bg-amber-500/10 text-amber-800 dark:text-amber-300 px-2.5 py-1.5 rounded-md">
+        <div className="mt-2 text-xs bg-amber-500/10 text-amber-800 dark:text-amber-300 px-2.5 py-1.5 rounded-md leading-relaxed">
           {event.actionDescription}
         </div>
       )}
@@ -164,7 +157,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
         {event.sourceMessages.length > 0 && (
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded transition-colors"
+            className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded transition-colors cursor-pointer"
             title="Toggle details"
           >
             {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
