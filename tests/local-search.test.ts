@@ -45,19 +45,42 @@ describe('Entity-Aware Event Query System & Natural Answers', () => {
       createdAt: '2026-08-14T08:00:00Z',
       updatedAt: '2026-08-14T08:00:00Z'
     },
-    // 3. Infoedge Process (PPT on Aug 14, Technical Assessment on Aug 16 at 4:00 PM, 4 PM - 5:30 PM window, link by 3:50 PM)
+    // 3. Infoedge Process (Multi-stage: PPT on Aug 14, Technical Assessment on Aug 16 at 4:00 PM, Interview TBD)
     {
       id: 'ev-infoedge',
-      title: 'Infoedge Technical Assessment',
-      type: 'assessment',
+      title: 'Campus Details | Infoedge India Ltd.',
+      type: 'placement',
       date: '2026-08-16',
       allDates: ['2026-08-14', '2026-08-16'],
       time: '4:00 PM',
       isContinuousRange: false,
       organization: 'Infoedge India Ltd.',
       company: 'Infoedge India Ltd.',
+      stages: [
+        {
+          name: 'PPT',
+          type: 'ppt',
+          date: '2026-08-14',
+          status: 'scheduled',
+          details: 'PPT — August 14, 2026'
+        },
+        {
+          name: 'Technical Assessment',
+          type: 'assessment',
+          date: '2026-08-16',
+          time: '4:00 PM',
+          status: 'scheduled',
+          details: 'Technical Assessment — August 16, 2026, Sunday, 4:00 PM, Virtual'
+        },
+        {
+          name: 'Interview',
+          type: 'interview',
+          status: 'tbd',
+          details: 'Yet to decide'
+        }
+      ],
       actionRequired: true,
-      actionDescription: 'The test will be active between 4 pm - 5:30 pm, and the link will be shared by 3:50PM.',
+      actionDescription: 'The test will be active between 4 pm - 5:30 pm, and the link is expected to be shared by 3:50PM.',
       links: [{ label: 'Open Assessment', url: 'https://assessment.infoedge.com' }],
       sourceMessages: [{ messageId: 'm-infoedge', subject: 'Campus Details | Infoedge India Ltd. | 14th & 16th August 2026', receivedAt: '2026-08-13T08:00:00Z' }],
       status: 'upcoming',
@@ -107,6 +130,7 @@ describe('Entity-Aware Event Query System & Natural Answers', () => {
     // Must be a direct YES answer
     expect(res).toMatch(/^Yes\./i);
     expect(res).toContain('Infoedge');
+    expect(res).toContain('Technical Assessment');
     expect(res).toContain('4:00 PM');
     expect(res).toContain('4 pm - 5:30 pm');
     expect(res).toContain('3:50PM');
@@ -179,6 +203,7 @@ describe('Entity-Aware Event Query System & Natural Answers', () => {
 
     expect(constraints.isEntitySpecific).toBe(true);
     expect(constraints.questionType).toBe('time_query');
+    expect(constraints.eventType).toBe('test');
 
     const infoedgeEvents = mockMailboxEvents.filter(e => e.id === 'ev-infoedge');
     const res = generateLocalDeterministicResponse(
@@ -191,9 +216,53 @@ describe('Entity-Aware Event Query System & Natural Answers', () => {
     );
 
     expect(res).toContain('Infoedge');
+    expect(res).toContain('Technical Assessment');
     expect(res).toContain('August 16');
     expect(res).toContain('4:00 PM');
     expect(res).toContain('4 pm - 5:30 pm');
+  });
+
+  it('Multi-Stage: "when was the infoedge ppt?" targets the PPT stage of the recruitment drive', () => {
+    const query = 'when was the infoedge ppt?';
+    const constraints = parseQueryConstraints(query, refAug15);
+
+    expect(constraints.isEntitySpecific).toBe(true);
+    expect(constraints.eventType).toBe('ppt');
+
+    const infoedgeEvents = mockMailboxEvents.filter(e => e.id === 'ev-infoedge');
+    const res = generateLocalDeterministicResponse(
+      query,
+      infoedgeEvents,
+      refAug15,
+      undefined,
+      mockMailboxEvents,
+      constraints
+    );
+
+    expect(res).toContain('PPT');
+    expect(res).toContain('August 14');
+  });
+
+  it('Multi-Stage: "do i have an infoedge interview?" reports interview is yet to be decided (TBD)', () => {
+    const query = 'do i have an infoedge interview?';
+    const constraints = parseQueryConstraints(query, refAug15);
+
+    expect(constraints.isEntitySpecific).toBe(true);
+    expect(constraints.eventType).toBe('interview');
+
+    const infoedgeEvents = mockMailboxEvents.filter(e => e.id === 'ev-infoedge');
+    const res = generateLocalDeterministicResponse(
+      query,
+      infoedgeEvents,
+      refAug15,
+      undefined,
+      mockMailboxEvents,
+      constraints
+    );
+
+    expect(res).toContain('Infoedge');
+    expect(res).toContain('interview');
+    expect(res).toContain('TBD');
   });
 
   it('TEST E: "what do i have today?" returns generic daily summary including all relevant events', () => {

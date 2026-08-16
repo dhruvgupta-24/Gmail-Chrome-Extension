@@ -138,14 +138,26 @@ function formatEntitySpecificResponse(
   const bestLink = getBestActionLink(primaryEvent.links);
   const linkStr = bestLink ? ` [${bestLink.label}](${bestLink.url})` : '';
 
-  // Extract human date & time representation
-  const targetDateStr = primaryEvent.date || primaryEvent.startDate;
-  const timeStr = primaryEvent.time ? ` at ${primaryEvent.time}` : '';
+  // Check if query is targeting a specific process stage (e.g. PPT, Assessment, Interview)
+  const matchedStage = (primaryEvent.stages || []).find(s => {
+    if (constraints.eventType === 'test') return ['assessment', 'coding_round', 'test'].includes(s.type);
+    if (constraints.eventType === 'ppt') return s.type === 'ppt';
+    if (constraints.eventType === 'interview') return s.type === 'interview';
+    if (constraints.eventType === 'deadline') return s.type === 'registration' || s.type === 'deadline';
+    return false;
+  });
+
+  const rawStageTitle = matchedStage?.name || primaryEvent.title;
+  const stageTitle = rawStageTitle.toLowerCase().includes(entityDisplay.toLowerCase())
+    ? rawStageTitle
+    : `${entityDisplay} ${rawStageTitle}`;
+  const targetDateStr = matchedStage?.date || primaryEvent.date || primaryEvent.startDate;
+  const timeStr = matchedStage?.time ? ` at ${matchedStage.time}` : (primaryEvent.time ? ` at ${primaryEvent.time}` : '');
   const dateFormatted = targetDateStr ? formatMonthDay(targetDateStr) : '';
 
-  // Build operational action details (e.g. "The test will be active between 4 pm - 5:30 pm. Link will be shared by 3:50PM.")
+  // Build operational action details (e.g. "The test will be active between 4 pm - 5:30 pm, and the link is expected to be shared by 3:50PM.")
   let actionDetails = '';
-  if (primaryEvent.actionDescription && !primaryEvent.actionDescription.startsWith('Action required')) {
+  if (primaryEvent.actionDescription && !primaryEvent.actionDescription.startsWith('Action required before')) {
     actionDetails = ` ${primaryEvent.actionDescription}`;
   }
 
@@ -156,6 +168,11 @@ function formatEntitySpecificResponse(
     multiDateStr = ` (${formattedDates.join(', ')})`;
   }
 
+  // Handle stage with TBD status (e.g. "do i have an infoedge interview?")
+  if (matchedStage && matchedStage.status === 'tbd') {
+    return `The **${entityDisplay}** ${matchedStage.name.toLowerCase()} is yet to be decided (TBD).`;
+  }
+
   // Scenario 2: Existence question with requested date (e.g. "do i have infoedge test today?")
   if (constraints.questionType === 'existence' && constraints.dateRange) {
     const requestedLabel = constraints.dateRange.label || 'today';
@@ -163,50 +180,50 @@ function formatEntitySpecificResponse(
     if (matchedOnRequestedDate === true) {
       // YES MATCH
       if (primaryEvent.isContinuousRange && primaryEvent.endDate) {
-        return `Yes. The **${primaryEvent.title}** test window is open today and remains active until ${formatMonthDay(primaryEvent.endDate)}.${actionDetails}${linkStr}`;
+        return `Yes. The **${stageTitle}** test window is open today and remains active until ${formatMonthDay(primaryEvent.endDate)}.${actionDetails}${linkStr}`;
       }
       if (primaryEvent.isDeadline) {
-        return `Yes. The deadline for **${primaryEvent.title}** is today${timeStr}.${actionDetails}${linkStr}`;
+        return `Yes. The deadline for **${stageTitle}** is today${timeStr}.${actionDetails}${linkStr}`;
       }
-      return `Yes. You have an **${primaryEvent.title}** ${requestedLabel.toLowerCase()}${timeStr}.${actionDetails}${linkStr}`;
+      return `Yes. You have the **${stageTitle}** ${requestedLabel.toLowerCase()}${timeStr}.${actionDetails}${linkStr}`;
     } else {
       // NO MATCH ON REQUESTED DATE, but upcoming event exists
       const upcomingDateFormatted = targetDateStr ? formatMonthDay(targetDateStr) : '';
       if (primaryEvent.isContinuousRange && primaryEvent.startDate && primaryEvent.endDate) {
-        return `No. You don't have a ${entityDisplay} ${eventTypeDisplay} ${requestedLabel.toLowerCase()}. The **${primaryEvent.title}** test window runs from ${formatMonthDay(primaryEvent.startDate)} to ${formatMonthDay(primaryEvent.endDate)}.${actionDetails}${linkStr}`;
+        return `No. You don't have a ${entityDisplay} ${eventTypeDisplay} ${requestedLabel.toLowerCase()}. The **${stageTitle}** test window runs from ${formatMonthDay(primaryEvent.startDate)} to ${formatMonthDay(primaryEvent.endDate)}.${actionDetails}${linkStr}`;
       }
       if (primaryEvent.isDeadline) {
-        return `No. You don't have a ${entityDisplay} deadline ${requestedLabel.toLowerCase()}. The deadline for **${primaryEvent.title}** is ${upcomingDateFormatted}${timeStr}.${actionDetails}${linkStr}`;
+        return `No. You don't have a ${entityDisplay} deadline ${requestedLabel.toLowerCase()}. The deadline for **${stageTitle}** is ${upcomingDateFormatted}${timeStr}.${actionDetails}${linkStr}`;
       }
-      return `No. You don't have an ${entityDisplay} ${eventTypeDisplay} scheduled for ${requestedLabel.toLowerCase()}. Your next **${primaryEvent.title}** is scheduled for ${upcomingDateFormatted}${timeStr}${multiDateStr}.${actionDetails}${linkStr}`;
+      return `No. You don't have an ${entityDisplay} ${eventTypeDisplay} scheduled for ${requestedLabel.toLowerCase()}. Your next **${stageTitle}** is scheduled for ${upcomingDateFormatted}${timeStr}${multiDateStr}.${actionDetails}${linkStr}`;
     }
   }
 
-  // Scenario 3: Time query (e.g. "when is my idfc test?", "when is the infoedge test?")
+  // Scenario 3: Time query (e.g. "when is my idfc test?", "when is the infoedge test?", "when was the infoedge ppt?")
   if (constraints.questionType === 'time_query') {
     if (primaryEvent.isContinuousRange && primaryEvent.startDate && primaryEvent.endDate) {
-      return `The test window for **${primaryEvent.title}** is open from ${formatMonthDay(primaryEvent.startDate)} to ${formatMonthDay(primaryEvent.endDate)}.${actionDetails}${linkStr}`;
+      return `The test window for **${stageTitle}** is open from ${formatMonthDay(primaryEvent.startDate)} to ${formatMonthDay(primaryEvent.endDate)}.${actionDetails}${linkStr}`;
     }
     if (primaryEvent.isDeadline) {
-      return `The registration/submission deadline for **${primaryEvent.title}** is ${dateFormatted}${timeStr}.${actionDetails}${linkStr}`;
+      return `The registration/submission deadline for **${stageTitle}** is ${dateFormatted}${timeStr}.${actionDetails}${linkStr}`;
     }
-    if (primaryEvent.allDates && primaryEvent.allDates.length > 1) {
+    if (primaryEvent.allDates && primaryEvent.allDates.length > 1 && !matchedStage) {
       const dates = primaryEvent.allDates.map(d => formatMonthDay(d)).join(', ');
-      return `The **${primaryEvent.title}** is scheduled across: ${dates}${timeStr}.${actionDetails}${linkStr}`;
+      return `The **${stageTitle}** is scheduled across: ${dates}${timeStr}.${actionDetails}${linkStr}`;
     }
-    return `Your **${primaryEvent.title}** is scheduled for ${dateFormatted}${timeStr}.${actionDetails}${linkStr}`;
+    return `Your **${stageTitle}** is scheduled for ${dateFormatted}${timeStr}.${actionDetails}${linkStr}`;
   }
 
   // Scenario 4: Link query (e.g. "where is the idfc link?")
   if (constraints.questionType === 'link_query') {
     if (bestLink) {
-      return `Here is the link for **${primaryEvent.title}**: [${bestLink.label}](${bestLink.url}).`;
+      return `Here is the link for **${stageTitle}**: [${bestLink.label}](${bestLink.url}).`;
     }
-    return `No direct test link was found in the email for **${primaryEvent.title}**. ${actionDetails || 'Please check the original email.'}`;
+    return `No direct test link was found in the email for **${stageTitle}**. ${actionDetails || 'Please check the original email.'}`;
   }
 
   // Fallback: Default Entity summary
-  return `### ${primaryEvent.title}\n- **Organization:** ${primaryEvent.company || primaryEvent.organization || entityDisplay}\n- **Schedule:** ${dateFormatted || 'Unspecified'}${timeStr}${multiDateStr}\n${actionDetails ? `- **Details:** ${actionDetails}\n` : ''}${bestLink ? `- **Link:** [${bestLink.label}](${bestLink.url})\n` : ''}`.trim();
+  return `### ${stageTitle}\n- **Organization:** ${primaryEvent.company || primaryEvent.organization || entityDisplay}\n- **Schedule:** ${dateFormatted || 'Unspecified'}${timeStr}${multiDateStr}\n${actionDetails ? `- **Details:** ${actionDetails}\n` : ''}${bestLink ? `- **Link:** [${bestLink.label}](${bestLink.url})\n` : ''}`.trim();
 }
 
 /**

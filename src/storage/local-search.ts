@@ -1,3 +1,4 @@
+import { getAllEvents } from './events-store';
 import { getDatabase } from './database';
 import { ExtractedEvent, DateRangeQuery } from '../types/events';
 import { calculateEventStatus, isEventInRange } from '../services/extraction/date-parser';
@@ -104,13 +105,22 @@ function scoreEventForEntity(event: ExtractedEvent, constraints: QueryConstraint
     const isTestType = ['test', 'assessment', 'coding_round', 'quiz', 'exam'].includes(event.type);
     const hasTestKeywords = /\b(assessment|test|oa|exam|coding\s+round|online\s+test)\b/i.test(fullText);
 
-    if (constraints.eventType === 'test' && (isTestType || hasTestKeywords)) {
+    // Check if stages match the requested event type
+    const stageMatch = (event.stages || []).some(s => {
+      if (constraints.eventType === 'test') return ['assessment', 'coding_round', 'test'].includes(s.type);
+      if (constraints.eventType === 'ppt') return s.type === 'ppt';
+      if (constraints.eventType === 'interview') return s.type === 'interview';
+      if (constraints.eventType === 'deadline') return s.type === 'registration' || s.type === 'deadline';
+      return false;
+    });
+
+    if (constraints.eventType === 'test' && (isTestType || hasTestKeywords || stageMatch)) {
       score += 40;
-    } else if (constraints.eventType === 'interview' && event.type === 'interview') {
+    } else if (constraints.eventType === 'interview' && (event.type === 'interview' || stageMatch)) {
       score += 40;
-    } else if (constraints.eventType === 'ppt' && (event.type === 'ppt' || fullText.includes('ppt') || fullText.includes('presentation'))) {
+    } else if (constraints.eventType === 'ppt' && (event.type === 'ppt' || fullText.includes('ppt') || stageMatch)) {
       score += 40;
-    } else if (constraints.eventType === 'deadline' && (event.isDeadline || event.type === 'registration' || fullText.includes('deadline'))) {
+    } else if (constraints.eventType === 'deadline' && (event.isDeadline || event.type === 'registration' || stageMatch)) {
       score += 40;
     }
   }
@@ -126,7 +136,8 @@ export async function searchLocalDatabase(
   nowDate: Date = new Date()
 ): Promise<LocalSearchResult> {
   const db = await getDatabase();
-  const allEvents = await db.getAll('events');
+  // Using getAllEvents guarantees auto-migration & re-indexing from cached messages when schema changes
+  const allEvents = await getAllEvents(nowDate);
   const allMessages = await db.getAll('cached_messages');
 
   const lowerQuery = query.toLowerCase().trim();
@@ -173,8 +184,28 @@ export async function searchLocalDatabase(
         const queryStart = constraints.dateRange.startDate;
         const queryEnd = constraints.dateRange.endDate;
 
-        // Check if any event for this entity overlaps the requested date
-        const dateMatched = dedupedEntityEvents.filter(ev => isEventInRange(ev, queryStart, queryEnd));
+        // Check if any event or event stage for this entity overlaps the requested date
+        const dateMatched = dedupedEntityEvents.filter(ev => {
+          // Check standard event date range
+          if (isEventInRange(ev, queryStart, queryEnd)) return true;
+
+          // Check multi-stage process stages
+          if (ev.stages && ev.stages.length > 0) {
+            return ev.stages.some(s => {
+              if (constraints.eventType && constraints.eventType !== 'any') {
+                const stageTypeMatches =
+                  (constraints.eventType === 'test' && ['assessment', 'coding_round', 'test'].includes(s.type)) ||
+                  (constraints.eventType === 'ppt' && s.type === 'ppt') ||
+                  (constraints.eventType === 'interview' && s.type === 'interview') ||
+                  (constraints.eventType === 'deadline' && (s.type === 'registration' || s.type === 'deadline'));
+                if (!stageTypeMatches) return false;
+              }
+              return s.date && s.date >= queryStart && s.date <= queryEnd;
+            });
+          }
+
+          return false;
+        });
 
         if (dateMatched.length > 0) {
           matchedOnRequestedDate = true;

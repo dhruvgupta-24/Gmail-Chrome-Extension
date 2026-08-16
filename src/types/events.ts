@@ -36,6 +36,15 @@ export interface SourceMessageRef {
   snippet?: string;
 }
 
+export interface ProcessStage {
+  name: string; // e.g. "PPT", "Technical Assessment", "Interview"
+  type: EventType; // "ppt", "assessment", "interview", "deadline"
+  date?: string; // YYYY-MM-DD
+  time?: string; // e.g. "4:00 PM"
+  status?: 'scheduled' | 'tbd' | 'completed' | 'unknown';
+  details?: string; // e.g. "Virtual", "Test active from 4:00 PM to 5:30 PM"
+}
+
 export interface ExtractedEvent {
   id: string; // "event-<normalizedKey>" or "thread-<threadId>"
   threadId?: string;
@@ -50,6 +59,7 @@ export interface ExtractedEvent {
   isDeadline?: boolean; // True if this event is primarily a single deadline
   isContinuousRange?: boolean; // True ONLY if the text explicitly states a continuous active window
   allDates?: string[]; // Discrete individual dates mentioned for the event (e.g. ["2026-08-12", "2026-08-24", "2026-08-25"])
+  stages?: ProcessStage[]; // Multi-stage recruitment process stages (PPT, Technical Assessment, Interview, etc.)
   organization?: string;
   actionRequired: boolean;
   actionDescription?: string;

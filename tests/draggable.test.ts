@@ -6,7 +6,8 @@ import {
   POPUP_HEIGHT,
   TRIGGER_WIDTH,
   TRIGGER_HEIGHT,
-  VIEWPORT_PADDING
+  VIEWPORT_PADDING,
+  DRAG_THRESHOLD_PX
 } from '../src/ui/hooks/useDraggablePosition';
 
 describe('Draggable Positioning & Viewport Clamping System', () => {
@@ -45,7 +46,7 @@ describe('Draggable Positioning & Viewport Clamping System', () => {
     expect(outRightBottom.y).toBe(expectedMaxY);
   });
 
-  it('TEST 3: Calculates correct trigger position when minimized', () => {
+  it('TEST 3: Calculates correct trigger position when minimized and clamps properly', () => {
     const triggerPos = clampPosition({ x: 50, y: 50 }, TRIGGER_WIDTH, TRIGGER_HEIGHT, VIEWPORT_W, VIEWPORT_H);
     expect(triggerPos.x).toBe(50);
     expect(triggerPos.y).toBe(50);
@@ -70,5 +71,14 @@ describe('Draggable Positioning & Viewport Clamping System', () => {
     const def = getDefaultPosition(POPUP_WIDTH, POPUP_HEIGHT, VIEWPORT_W, VIEWPORT_H);
     expect(def.x).toBe(VIEWPORT_W - POPUP_WIDTH - 24);
     expect(def.y).toBe(VIEWPORT_H - POPUP_HEIGHT - 24);
+  });
+
+  it('defines drag threshold for click vs drag separation', () => {
+    expect(DRAG_THRESHOLD_PX).toBe(6);
+    const smallMovement = Math.hypot(2, 3); // 3.6px < 6px (click)
+    expect(smallMovement < DRAG_THRESHOLD_PX).toBe(true);
+
+    const dragMovement = Math.hypot(10, 15); // 18px >= 6px (drag)
+    expect(dragMovement >= DRAG_THRESHOLD_PX).toBe(true);
   });
 });

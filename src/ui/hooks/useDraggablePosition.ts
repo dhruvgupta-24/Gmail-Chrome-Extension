@@ -10,6 +10,7 @@ export const POPUP_HEIGHT = 620;
 export const TRIGGER_WIDTH = 150;
 export const TRIGGER_HEIGHT = 48;
 export const VIEWPORT_PADDING = 16;
+export const DRAG_THRESHOLD_PX = 6;
 const STORAGE_KEY = 'gmail_assistant_position';
 
 /**
@@ -60,10 +61,11 @@ export function getDefaultPosition(
   );
 }
 
-export function useDraggablePosition(isOpen: boolean) {
+export function useDraggablePosition(isOpen: boolean, onOpenTrigger?: () => void) {
   const [position, setPosition] = useState<Position>(() => getDefaultPosition(POPUP_WIDTH, POPUP_HEIGHT));
   const [isDragging, setIsDragging] = useState(false);
   const isDraggingRef = useRef(false);
+  const hasMovedPastThresholdRef = useRef(false);
   const dragStartRef = useRef<{ pointerX: number; pointerY: number; startX: number; startY: number }>({
     pointerX: 0,
     pointerY: 0,
@@ -131,21 +133,24 @@ export function useDraggablePosition(isOpen: boolean) {
     }
   }, [width, height, savePosition]);
 
-  // 4. Pointer Drag Handlers
-  const handlePointerDown = useCallback(
-    (e: React.PointerEvent) => {
+  // 4. Pointer Drag Handler (for Header or Minimized Trigger)
+  const createPointerDownHandler = useCallback(
+    (isTrigger: boolean) => (e: React.PointerEvent) => {
       // Only initiate dragging on primary button (left-click)
       if (e.button !== 0) return;
 
-      // Do NOT start dragging if user clicked an interactive child (e.g. button, input, link)
+      // Do NOT start dragging if user clicked an interactive child in header (e.g. action buttons)
       const target = e.target as HTMLElement;
-      if (target.closest('button') || target.closest('a') || target.closest('input') || target.closest('textarea')) {
+      if (!isTrigger && (target.closest('button') || target.closest('a') || target.closest('input') || target.closest('textarea'))) {
         return;
       }
 
       e.preventDefault();
-      isDraggingRef.current = true;
-      setIsDragging(true);
+      isDraggingRef.current = false;
+      hasMovedPastThresholdRef.current = false;
+
+      const currentWidth = isTrigger ? TRIGGER_WIDTH : POPUP_WIDTH;
+      const currentHeight = isTrigger ? TRIGGER_HEIGHT : POPUP_HEIGHT;
 
       dragStartRef.current = {
         pointerX: e.clientX,
@@ -155,44 +160,58 @@ export function useDraggablePosition(isOpen: boolean) {
       };
 
       const handlePointerMove = (moveEvt: PointerEvent) => {
-        if (!isDraggingRef.current) return;
         const deltaX = moveEvt.clientX - dragStartRef.current.pointerX;
         const deltaY = moveEvt.clientY - dragStartRef.current.pointerY;
+        const distance = Math.hypot(deltaX, deltaY);
 
-        const newPos = {
-          x: dragStartRef.current.startX + deltaX,
-          y: dragStartRef.current.startY + deltaY
-        };
+        if (!hasMovedPastThresholdRef.current && distance >= DRAG_THRESHOLD_PX) {
+          hasMovedPastThresholdRef.current = true;
+          isDraggingRef.current = true;
+          setIsDragging(true);
+        }
 
-        const clamped = clampPosition(newPos, width, height);
-        setPosition(clamped);
+        if (isDraggingRef.current) {
+          const newPos = {
+            x: dragStartRef.current.startX + deltaX,
+            y: dragStartRef.current.startY + deltaY
+          };
+
+          const clamped = clampPosition(newPos, currentWidth, currentHeight);
+          setPosition(clamped);
+        }
       };
 
       const handlePointerUp = (upEvt: PointerEvent) => {
-        if (!isDraggingRef.current) return;
-        isDraggingRef.current = false;
-        setIsDragging(false);
-
         if (typeof window !== 'undefined') {
           window.removeEventListener('pointermove', handlePointerMove);
           window.removeEventListener('pointerup', handlePointerUp);
           window.removeEventListener('pointercancel', handlePointerUp);
         }
 
-        const deltaX = upEvt.clientX - dragStartRef.current.pointerX;
-        const deltaY = upEvt.clientY - dragStartRef.current.pointerY;
+        if (isDraggingRef.current) {
+          isDraggingRef.current = false;
+          setIsDragging(false);
 
-        const finalPos = clampPosition(
-          {
-            x: dragStartRef.current.startX + deltaX,
-            y: dragStartRef.current.startY + deltaY
-          },
-          width,
-          height
-        );
+          const deltaX = upEvt.clientX - dragStartRef.current.pointerX;
+          const deltaY = upEvt.clientY - dragStartRef.current.pointerY;
 
-        setPosition(finalPos);
-        savePosition(finalPos);
+          const finalPos = clampPosition(
+            {
+              x: dragStartRef.current.startX + deltaX,
+              y: dragStartRef.current.startY + deltaY
+            },
+            currentWidth,
+            currentHeight
+          );
+
+          setPosition(finalPos);
+          savePosition(finalPos);
+        } else {
+          // Movement remained below threshold: treat as a regular click!
+          if (isTrigger && onOpenTrigger) {
+            onOpenTrigger();
+          }
+        }
       };
 
       if (typeof window !== 'undefined') {
@@ -201,8 +220,11 @@ export function useDraggablePosition(isOpen: boolean) {
         window.addEventListener('pointercancel', handlePointerUp);
       }
     },
-    [position, width, height, savePosition]
+    [position, savePosition, onOpenTrigger]
   );
+
+  const handleHeaderPointerDown = createPointerDownHandler(false);
+  const handleTriggerPointerDown = createPointerDownHandler(true);
 
   // Trigger position when minimized is clamped to trigger dimensions
   const triggerPosition = clampPosition(position, TRIGGER_WIDTH, TRIGGER_HEIGHT);
@@ -211,7 +233,8 @@ export function useDraggablePosition(isOpen: boolean) {
     position,
     triggerPosition,
     isDragging,
-    handlePointerDown,
+    handleHeaderPointerDown,
+    handleTriggerPointerDown,
     setPosition: (newPos: Position) => {
       const clamped = clampPosition(newPos, width, height);
       setPosition(clamped);

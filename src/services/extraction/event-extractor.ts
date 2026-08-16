@@ -1,9 +1,9 @@
-import { ExtractedEvent, EventType, ActionLink } from '../../types/events';
+import { ExtractedEvent, EventType, ActionLink, ProcessStage } from '../../types/events';
 import { ParsedEmailMessage } from '../../types/gmail';
-import { parseDateFromEmailText } from './date-parser';
+import { parseDateFromEmailText, extractTimeFromText } from './date-parser';
 import { extractActionLinks } from '../gmail/links';
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 /**
  * Strips email reply/forward prefixes, tags, and extraneous whitespace to produce a clean display title.
@@ -103,7 +103,7 @@ export function detectActionRequired(subject: string, body: string): { actionReq
       parts.push(`The test will be active ${activeWindowMatch[0].trim()}`);
     }
     if (linkShareMatch) {
-      parts.push(`The link will be shared by ${linkShareMatch[1].trim()}`);
+      parts.push(`the link is expected to be shared by ${linkShareMatch[1].trim()}`);
     }
     return {
       actionRequired: true,
@@ -161,6 +161,72 @@ export function extractOrganization(senderName: string, subject: string, body: s
 }
 
 /**
+ * Extracts discrete recruitment process stages (PPT, Assessment, Interview, Registration) from email text.
+ */
+export function extractProcessStages(
+  subject: string,
+  body: string,
+  emailTimestamp: number,
+  nowDate: Date = new Date()
+): ProcessStage[] {
+  const stages: ProcessStage[] = [];
+  const text = `${subject}\n\n${body}`;
+
+  // Stage patterns: e.g. "PPT — August 14, 2026", "Technical Assessment — August 16, 2026, Sunday, 4:00 PM, Virtual", "Interview — Yet to decide"
+  const stageRegexes = [
+    {
+      type: 'ppt' as EventType,
+      regex: /\b(PPT|Pre[- ]Placement\s+Talk|Presentation)\s*(?:—|-|:)\s*([^\n]+)/gi
+    },
+    {
+      type: 'assessment' as EventType,
+      regex: /\b(Technical\s+Assessment|Online\s+Assessment|OA\b|Coding\s+Round|Coding\s+Test|Online\s+Test|Aptitude\s+Test|Assessment)\s*(?:—|-|:)\s*([^\n]+)/gi
+    },
+    {
+      type: 'interview' as EventType,
+      regex: /\b(Technical\s+Interview|HR\s+Interview|Interview|Discussion\s+Round)\s*(?:—|-|:)\s*([^\n]+)/gi
+    },
+    {
+      type: 'registration' as EventType,
+      regex: /\b(Registration|Registration\s+Deadline|Last\s+Date\s+to\s+Apply|Apply\s+Before)\s*(?:—|-|:)\s*([^\n]+)/gi
+    }
+  ];
+
+  for (const { type, regex } of stageRegexes) {
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(text)) !== null) {
+      const stageName = match[1].trim();
+      const stageContent = match[2].trim();
+
+      const isTBD = /\b(yet\s+to\s+decide|tbd|to\s+be\s+decided|to\s+be\s+announced|tba|not\s+decided)\b/i.test(stageContent);
+
+      if (isTBD) {
+        stages.push({
+          name: stageName,
+          type,
+          status: 'tbd',
+          details: 'Yet to decide'
+        });
+      } else {
+        const parsed = parseDateFromEmailText(stageContent, '', emailTimestamp, nowDate);
+        const stageTime = parsed.time || extractTimeFromText(stageContent);
+
+        stages.push({
+          name: stageName,
+          type,
+          date: parsed.date,
+          time: stageTime,
+          status: 'scheduled',
+          details: stageContent
+        });
+      }
+    }
+  }
+
+  return stages;
+}
+
+/**
  * Deterministically extracts structured event from a parsed Gmail message.
  */
 export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Date = new Date()): ExtractedEvent | null {
@@ -170,9 +236,35 @@ export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Dat
   const links = extractActionLinks(email.htmlContent || email.plainText);
   const organization = extractOrganization(email.senderName, email.subject, email.plainText);
   const cleanTitle = cleanEventTitle(email.subject);
+  const stages = extractProcessStages(email.subject, email.plainText, email.timestamp, currentNow);
 
-  if (type === 'other' && !actionRequired && dateResult.status === 'unknown') {
+  if (type === 'other' && !actionRequired && dateResult.status === 'unknown' && stages.length === 0) {
     return null;
+  }
+
+  // Combine dates from stages and main dateResult
+  const allDatesSet = new Set<string>();
+  (dateResult.allDates || []).forEach(d => allDatesSet.add(d));
+  if (dateResult.date) allDatesSet.add(dateResult.date);
+  if (dateResult.startDate) allDatesSet.add(dateResult.startDate);
+  if (dateResult.endDate) allDatesSet.add(dateResult.endDate);
+  stages.forEach(s => {
+    if (s.date) allDatesSet.add(s.date);
+  });
+  const allDates = Array.from(allDatesSet).sort();
+
+  // If stages exist, prefer primary stage date / time if available
+  let primaryDate = dateResult.date;
+  let primaryTime = dateResult.time;
+
+  const assessmentStage = stages.find(s => ['assessment', 'coding_round', 'test'].includes(s.type) && s.date);
+  if (assessmentStage) {
+    if (!primaryDate || assessmentStage.date) {
+      primaryDate = assessmentStage.date;
+    }
+    if (!primaryTime && assessmentStage.time) {
+      primaryTime = assessmentStage.time;
+    }
   }
 
   // Derive stable deduplication key
@@ -190,12 +282,13 @@ export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Dat
     type,
     startDate: dateResult.startDate,
     endDate: dateResult.endDate,
-    date: dateResult.date,
-    time: dateResult.time,
+    date: primaryDate,
+    time: primaryTime,
     deadline: dateResult.deadline,
     isDeadline: dateResult.isDeadline,
     isContinuousRange: dateResult.isContinuousRange,
-    allDates: dateResult.allDates,
+    allDates: allDates.length > 0 ? allDates : undefined,
+    stages: stages.length > 0 ? stages : undefined,
     organization,
     actionRequired,
     actionDescription,
@@ -220,7 +313,7 @@ export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Dat
 
 /**
  * Merges multiple emails belonging to the same process or thread
- * preserving timing updates, action descriptions, and discrete dates.
+ * preserving timing updates, action descriptions, discrete dates, and multi-stage details.
  */
 export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent): ExtractedEvent {
   // Merge source messages avoiding duplicate messageId
@@ -236,6 +329,25 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
   (existing.allDates || []).forEach(d => datesSet.add(d));
   (incoming.allDates || []).forEach(d => datesSet.add(d));
   const allDates = Array.from(datesSet).sort();
+
+  // Combine and update stages
+  const stageMap = new Map<string, ProcessStage>();
+  (existing.stages || []).forEach(s => stageMap.set(s.type, s));
+  (incoming.stages || []).forEach(s => {
+    const prev = stageMap.get(s.type);
+    if (!prev) {
+      stageMap.set(s.type, s);
+    } else {
+      stageMap.set(s.type, {
+        ...prev,
+        ...s,
+        date: s.date || prev.date,
+        time: s.time || prev.time,
+        status: s.status || prev.status,
+        details: s.details && s.details.length >= (prev.details || '').length ? s.details : prev.details
+      });
+    }
+  });
 
   const isIncomingNewer = new Date(incoming.updatedAt).getTime() >= new Date(existing.updatedAt).getTime();
   const primary = isIncomingNewer ? incoming : existing;
@@ -255,6 +367,8 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
     }
   }
 
+  const mergedStages = Array.from(stageMap.values());
+
   return {
     ...primary,
     title: cleanEventTitle(primary.title.length >= secondary.title.length ? primary.title : secondary.title),
@@ -267,6 +381,7 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
     isContinuousRange: isContinuous,
     isDeadline,
     allDates: allDates.length > 0 ? allDates : undefined,
+    stages: mergedStages.length > 0 ? mergedStages : undefined,
     actionRequired: primary.actionRequired || secondary.actionRequired,
     actionDescription: combinedDesc,
     organization: primary.organization || secondary.organization,

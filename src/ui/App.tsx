@@ -24,8 +24,14 @@ export const App: React.FC = () => {
   const [oauthStatus, setOauthStatus] = useState<OAuthStatus | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
 
-  // Position & Drag hook
-  const { position, triggerPosition, isDragging, handlePointerDown } = useDraggablePosition(isOpen);
+  // Position & Drag hook for both expanded popup and minimized floating pill
+  const {
+    position,
+    triggerPosition,
+    isDragging,
+    handleHeaderPointerDown,
+    handleTriggerPointerDown
+  } = useDraggablePosition(isOpen, () => setIsOpen(true));
 
   // Helper to send typed message to background service worker
   const sendMessage = useCallback(async <T,>(req: ExtensionRequest): Promise<T> => {
@@ -180,12 +186,14 @@ export const App: React.FC = () => {
 
   return (
     <div className={isDarkMode ? 'dark' : ''}>
-      {/* Minimized Floating Button placed at user-defined position */}
+      {/* Minimized Floating Button placed at user-defined position with Drag & Click support */}
       <FloatingTrigger
         isOpen={isOpen}
         onClick={() => setIsOpen(true)}
         dueTodayCount={dueTodayCount}
         position={triggerPosition}
+        onPointerDown={handleTriggerPointerDown}
+        isDragging={isDragging}
       />
 
       {/* Floating Assistant Card / Popup with Custom Drag Position */}
@@ -209,7 +217,7 @@ export const App: React.FC = () => {
             onMinimize={() => setIsOpen(false)}
             dueTodayCount={dueTodayCount}
             lastSyncTimestamp={settings.lastSyncTimestamp}
-            onPointerDown={handlePointerDown}
+            onPointerDown={handleHeaderPointerDown}
             isDragging={isDragging}
           />
 
