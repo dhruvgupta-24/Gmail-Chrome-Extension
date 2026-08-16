@@ -10,6 +10,7 @@ import { ChatView } from './components/ChatView';
 import { SettingsModal } from './components/SettingsModal';
 import { FloatingTrigger } from './components/FloatingTrigger';
 import { isGmailDarkMode } from '../content/gmail-observer';
+import { useDraggablePosition } from './hooks/useDraggablePosition';
 
 export const App: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -22,6 +23,9 @@ export const App: React.FC = () => {
   const [settings, setSettings] = useState<ExtendedSettings>(DEFAULT_SETTINGS);
   const [oauthStatus, setOauthStatus] = useState<OAuthStatus | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
+
+  // Position & Drag hook
+  const { position, triggerPosition, isDragging, handlePointerDown } = useDraggablePosition(isOpen);
 
   // Helper to send typed message to background service worker
   const sendMessage = useCallback(async <T,>(req: ExtensionRequest): Promise<T> => {
@@ -176,16 +180,25 @@ export const App: React.FC = () => {
 
   return (
     <div className={isDarkMode ? 'dark' : ''}>
-      {/* Minimized Floating Button in Bottom-Right */}
+      {/* Minimized Floating Button placed at user-defined position */}
       <FloatingTrigger
         isOpen={isOpen}
         onClick={() => setIsOpen(true)}
         dueTodayCount={dueTodayCount}
+        position={triggerPosition}
       />
 
-      {/* Floating Assistant Card / Popup */}
+      {/* Floating Assistant Card / Popup with Custom Drag Position */}
       {isOpen && (
-        <div className="fixed bottom-6 right-6 z-[999999] w-[410px] max-w-[calc(100vw-32px)] h-[620px] max-h-[calc(100vh-48px)] bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xl shadow-slate-900/25 dark:shadow-black/70 flex flex-col overflow-hidden animate-popup-in select-text">
+        <div
+          style={{
+            left: `${position.x}px`,
+            top: `${position.y}px`
+          }}
+          className={`fixed z-[999999] w-[410px] max-w-[calc(100vw-32px)] h-[620px] max-h-[calc(100vh-48px)] bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xl shadow-slate-900/25 dark:shadow-black/70 flex flex-col overflow-hidden select-text ${
+            isDragging ? 'select-none pointer-events-auto transition-none' : 'animate-popup-in transition-all'
+          }`}
+        >
           <AssistantHeader
             activeTab={activeTab}
             onTabChange={setActiveTab}
@@ -196,6 +209,8 @@ export const App: React.FC = () => {
             onMinimize={() => setIsOpen(false)}
             dueTodayCount={dueTodayCount}
             lastSyncTimestamp={settings.lastSyncTimestamp}
+            onPointerDown={handlePointerDown}
+            isDragging={isDragging}
           />
 
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-slate-50/30 dark:bg-slate-950/20">
