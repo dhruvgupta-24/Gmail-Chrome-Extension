@@ -80,7 +80,15 @@ export function calculateEventStatus(
     if (stages.some(s => s.date === tomorrowStr)) return 'tomorrow';
   }
 
-  // 2. Check discrete dates list
+  // 2. Check continuous active range (e.g. Aug 15 to Aug 19)
+  if (isContinuousRange && targetDateStr && endDateStr) {
+    if (todayStr >= targetDateStr && todayStr <= endDateStr) return 'today';
+    if (tomorrowStr >= targetDateStr && tomorrowStr <= endDateStr) return 'tomorrow';
+    if (targetDateStr > tomorrowStr) return 'upcoming';
+    if (endDateStr < todayStr) return 'past';
+  }
+
+  // 3. Check discrete dates list
   if (allDates && allDates.length > 0) {
     if (allDates.includes(todayStr)) return 'today';
     if (allDates.includes(tomorrowStr)) return 'tomorrow';
@@ -90,14 +98,6 @@ export function calculateEventStatus(
 
     const pastDates = allDates.filter(d => d < todayStr);
     if (pastDates.length === allDates.length) return 'past';
-  }
-
-  // 3. Check continuous active range (e.g. Aug 15 to Aug 19)
-  if (isContinuousRange && targetDateStr && endDateStr) {
-    if (todayStr >= targetDateStr && todayStr <= endDateStr) return 'today';
-    if (tomorrowStr >= targetDateStr && tomorrowStr <= endDateStr) return 'tomorrow';
-    if (targetDateStr > tomorrowStr) return 'upcoming';
-    if (endDateStr < todayStr) return 'past';
   }
 
   // 4. Check single date / deadline (Point in time)

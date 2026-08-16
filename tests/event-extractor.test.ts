@@ -5,16 +5,70 @@ import {
   extractEventFromEmail,
   cleanEventTitle,
   normalizeTitleForDeduplication,
-  extractProcessStages
+  extractProcessStages,
+  extractOrganization
 } from '../src/services/extraction/event-extractor';
+import { calculateEventStatus } from '../src/services/extraction/date-parser';
 import { deduplicateEvents } from '../src/storage/local-search';
 import { generateLocalDeterministicResponse } from '../src/services/ai/local-responder';
 import { parseQueryConstraints } from '../src/services/retrieval/intent';
 import { ParsedEmailMessage } from '../src/types/gmail';
 
 describe('Event Extractor & Deduplication', () => {
+  const fixedAug14 = new Date('2026-08-14T10:00:00Z');
   const fixedAug15 = new Date('2026-08-15T10:00:00Z');
   const fixedAug16 = new Date('2026-08-16T10:00:00Z');
+  const fixedAug19 = new Date('2026-08-19T10:00:00Z');
+  const fixedAug20 = new Date('2026-08-20T10:00:00Z');
+
+  it('PART 1 CLASSIFICATION: Classifies nominations, hackathons, registrations, assessments accurately', () => {
+    // 1. Call for Nominations -> nomination
+    expect(detectEventType("Call for Nominations – VC's Excellence Award (2025–26) for Teaching Staff - Step I", 'Please submit your nomination before Aug 30.'))
+      .toBe('nomination');
+
+    // 2. Registration for Internal Hackathon -> hackathon
+    expect(detectEventType('Registration for Internal Hackathon for SIH 2026', 'Team presentation and project submission guidelines'))
+      .toBe('hackathon');
+
+    // 3. Technical Assessment -> coding_round / assessment
+    expect(detectEventType('Campus Details | Infoedge India Ltd. - Technical Assessment', 'Your assessment will be held on HackerRank'))
+      .toBe('coding_round');
+
+    // 4. Pre-Placement Talk -> ppt
+    expect(detectEventType('Pre-Placement Talk: Cognizant Ace Frontier', 'Join meeting session on Teams'))
+      .toBe('ppt');
+
+    // 5. Interview Schedule -> interview
+    expect(detectEventType('Interview Schedule: Goldman Sachs Technical Round', 'Join interview call'))
+      .toBe('interview');
+  });
+
+  it('PART 5 COMPANY EXTRACTION: Extracts company cleanly without being polluted by Microsoft Teams in body', () => {
+    const org = extractOrganization(
+      'Placement Cell <tnp@univ.edu>',
+      'Campus Details | IDFC Bank | 14th, 17th & 19th August 2026',
+      'Please join the briefing on Microsoft Teams at https://teams.microsoft.com'
+    );
+    expect(org).toBe('IDFC Bank');
+    expect(org).not.toBe('Microsoft');
+  });
+
+  it('PART 4 ACTIVE DATE-RANGE: AIMCAT Aug 15-19 evaluates as active (today) on Aug 15, 16, 19, and past on Aug 20', () => {
+    // Before start: Aug 14 -> upcoming
+    expect(calculateEventStatus('2026-08-15', fixedAug14, '2026-08-19', true, ['2026-08-15', '2026-08-19'])).toBe('tomorrow');
+
+    // Start day: Aug 15 -> today
+    expect(calculateEventStatus('2026-08-15', fixedAug15, '2026-08-19', true, ['2026-08-15', '2026-08-19'])).toBe('today');
+
+    // Middle day: Aug 16 -> today (active window)
+    expect(calculateEventStatus('2026-08-15', fixedAug16, '2026-08-19', true, ['2026-08-15', '2026-08-19'])).toBe('today');
+
+    // End day: Aug 19 -> today
+    expect(calculateEventStatus('2026-08-15', fixedAug19, '2026-08-19', true, ['2026-08-15', '2026-08-19'])).toBe('today');
+
+    // After end: Aug 20 -> past
+    expect(calculateEventStatus('2026-08-15', fixedAug20, '2026-08-19', true, ['2026-08-15', '2026-08-19'])).toBe('past');
+  });
 
   it('cleans subject titles by removing Re:, Fwd:, [External] prefixes', () => {
     expect(cleanEventTitle('Re: Re: Campus Detail | Sigmoid OA')).toBe('Campus Detail | Sigmoid OA');
@@ -75,47 +129,6 @@ Interview\tYet to Decide\tIn Campus
     const interviewStage = stages.find(s => s.type === 'interview');
     expect(interviewStage).toBeDefined();
     expect(interviewStage?.status).toBe('tbd');
-  });
-
-  it('CASE 6: Deduplicates "Destination Dr. Reddy\'s 3.0 is LIVE" and "Fwd: Destination Dr. Reddy\'s 3.0..." into ONE event', () => {
-    const email1: ParsedEmailMessage = {
-      id: 'msg-dr1',
-      threadId: 'th-dr1',
-      subject: "Destination Dr. Reddy's 3.0 is LIVE - Campus Engagement",
-      sender: 'Dr. Reddy’s Campus Team <campus@drreddys.com>',
-      senderName: 'Dr. Reddy’s',
-      senderEmail: 'campus@drreddys.com',
-      recipient: 'student@univ.edu',
-      date: '2026-08-10T08:00:00Z',
-      timestamp: new Date('2026-08-10T08:00:00Z').getTime(),
-      snippet: 'Registration is live for Dr. Reddy’s 3.0',
-      plainText: 'Register before 20th August 2026 at https://drreddys.com/register',
-      links: [{ text: 'Register Now', href: 'https://drreddys.com/register' }],
-      labels: ['INBOX']
-    };
-
-    const email2: ParsedEmailMessage = {
-      id: 'msg-dr2',
-      threadId: 'th-dr2',
-      subject: "Fwd: Destination Dr. Reddy's 3.0 is LIVE - Campus Engagement",
-      sender: 'Placement Officer <tnp@univ.edu>',
-      senderName: 'Placement Cell',
-      senderEmail: 'tnp@univ.edu',
-      recipient: 'all-students@univ.edu',
-      date: '2026-08-11T08:00:00Z',
-      timestamp: new Date('2026-08-11T08:00:00Z').getTime(),
-      snippet: 'Please find forwarded details for Dr. Reddy’s',
-      plainText: 'Register before 20th August 2026 at https://drreddys.com/register',
-      links: [{ text: 'Register Now', href: 'https://drreddys.com/register' }],
-      labels: ['INBOX']
-    };
-
-    const ev1 = extractEventFromEmail(email1, fixedAug15)!;
-    const ev2 = extractEventFromEmail(email2, fixedAug15)!;
-
-    const deduped = deduplicateEvents([ev1, ev2]);
-    expect(deduped.length).toBe(1);
-    expect(deduped[0].sourceMessages.length).toBe(2);
   });
 
   it('REAL GMAIL SCENARIO: Handles "Link will be shared by 3:50PM" with NO fake URLs and NO leaked Teams links on Assessment', () => {

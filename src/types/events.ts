@@ -10,6 +10,8 @@ export type EventType =
   | "assignment"
   | "submission"
   | "registration"
+  | "nomination"
+  | "hackathon"
   | "deadline"
   | "ppt"
   | "internship"

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ExtractedEvent, ActionLink } from '../../types/events';
 import { formatEventSemanticDate, openGmailMessageInCurrentTab, getTodayDateString } from '../../shared/utils';
 import { getBestActionLinkForStage } from '../../services/ai/local-responder';
+import { deduplicateActionLinks } from '../../services/gmail/links';
 import {
   ExternalLink,
   Mail,
@@ -77,10 +78,13 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
         return <Users className="w-3.5 h-3.5 text-emerald-500" />;
       case 'ppt':
         return <Video className="w-3.5 h-3.5 text-indigo-500" />;
+      case 'nomination':
       case 'assignment':
       case 'submission':
       case 'registration':
         return <FileCheck className="w-3.5 h-3.5 text-teal-500" />;
+      case 'hackathon':
+        return <Code2 className="w-3.5 h-3.5 text-amber-500" />;
       default:
         return <Calendar className="w-3.5 h-3.5 text-slate-400" />;
     }
@@ -97,17 +101,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
         filtered.push(best);
       }
     } else {
-      const seen = new Set<string>();
-      for (const l of rawLinks) {
-        const normUrl = l.url.trim().toLowerCase().replace(/\/+$/, '');
-        const normLabel = l.label.trim().toLowerCase();
-        const key = `${normUrl}|${normLabel}`;
-        if (!seen.has(key) && !seen.has(normUrl)) {
-          seen.add(key);
-          seen.add(normUrl);
-          filtered.push(l);
-        }
-      }
+      return deduplicateActionLinks(rawLinks);
     }
     return filtered;
   }, [event.links, activeStage]);
@@ -171,7 +165,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event }) => {
       {/* Action Buttons */}
       <div className="mt-3 flex items-center justify-between gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800">
         <div className="flex items-center gap-1.5 flex-wrap">
-          {actionableLinks.slice(0, 2).map((link, idx) => (
+          {actionableLinks.slice(0, 2).map((link: ActionLink, idx: number) => (
             <a
               key={idx}
               href={link.url}

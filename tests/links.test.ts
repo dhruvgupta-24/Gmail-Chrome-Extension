@@ -1,11 +1,52 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeUrl, classifyLinkType, extractActionLinks } from '../src/services/gmail/links';
+import { sanitizeUrl, classifyLinkType, extractActionLinks, unwrapRedirectUrl, deduplicateActionLinks } from '../src/services/gmail/links';
+import { ActionLink } from '../src/types/events';
 
-describe('Link Extractor and Semantic Classifier', () => {
-  it('strips UTM tracking parameters from URLs', () => {
+describe('Link Extractor, Unwrapper and Semantic Deduplication', () => {
+  it('unwraps Google redirect URLs to actual target destination', () => {
+    const googleRedirect = 'https://www.google.com/url?q=https://unstop.com/competitions/sih-2026&sa=D&source=docs&ust=1723800000';
+    const unwrapped = unwrapRedirectUrl(googleRedirect);
+    expect(unwrapped).toBe('https://unstop.com/competitions/sih-2026');
+  });
+
+  it('unwraps Outlook SafeLinks to actual target destination', () => {
+    const safeLink = 'https://nam02.safelinks.protection.outlook.com/?url=https%3A%2F%2Fforms.gle%2Fvc-award-nomination&data=05%7C02%7Ctest';
+    const unwrapped = unwrapRedirectUrl(safeLink);
+    expect(unwrapped).toBe('https://forms.gle/vc-award-nomination');
+  });
+
+  it('strips UTM and email tracking query parameters from URLs', () => {
     const raw = 'https://hackerrank.com/test-123?utm_source=email&utm_medium=mailchimp&utm_campaign=hiring#instructions';
     const clean = sanitizeUrl(raw);
     expect(clean).toBe('https://hackerrank.com/test-123#instructions');
+  });
+
+  it('DEDUPLICATION: Collapses duplicate action buttons with tracking parameter variants into ONE button', () => {
+    const rawLinks: ActionLink[] = [
+      { label: 'Register on Unstop', url: 'https://unstop.com/competitions/hackathon?ref=email1', type: 'registration' },
+      { label: 'Register on Unstop', url: 'https://unstop.com/competitions/hackathon?utm_source=blast', type: 'registration' },
+      { label: 'Open Registration Form', url: 'https://forms.gle/sih2026?usp=sf_link', type: 'registration' },
+      { label: 'Open Registration Form', url: 'https://forms.gle/sih2026', type: 'registration' }
+    ];
+
+    const deduped = deduplicateActionLinks(rawLinks);
+    expect(deduped.length).toBe(2);
+    expect(deduped.filter(l => l.label === 'Register on Unstop').length).toBe(1);
+    expect(deduped.filter(l => l.label === 'Open Registration Form').length).toBe(1);
+  });
+
+  it('DEDUPLICATION: Preserves genuinely distinct actions on the same event', () => {
+    const mixedLinks: ActionLink[] = [
+      { label: 'Apply', url: 'https://drreddys.com/apply', type: 'registration' },
+      { label: 'Join Teams', url: 'https://teams.microsoft.com/l/meetup-join/123', type: 'meeting' },
+      { label: 'Download Admit Card', url: 'https://tcs.com/admitcard', type: 'portal' }
+    ];
+
+    const deduped = deduplicateActionLinks(mixedLinks);
+    expect(deduped.length).toBe(3);
+    expect(deduped.some(l => l.label === 'Apply')).toBe(true);
+    expect(deduped.some(l => l.label === 'Join Teams')).toBe(true);
+    expect(deduped.some(l => l.label === 'Download Admit Card')).toBe(true);
   });
 
   it('TEST 6: Classifies assessment and test platforms', () => {
@@ -58,12 +99,10 @@ describe('Link Extractor and Semantic Classifier', () => {
     `;
 
     const links = extractActionLinks(html);
-    // Should ONLY extract the real test link and registration form link
     expect(links.length).toBe(2);
     expect(links.some(l => l.url.includes('start-test'))).toBe(true);
     expect(links.some(l => l.url.includes('forms.gle'))).toBe(true);
 
-    // Must NOT contain Unsubscribe, Instagram, Visit Our Website, or Privacy
     expect(links.some(l => l.label.toLowerCase().includes('unsubscribe'))).toBe(false);
     expect(links.some(l => l.label.toLowerCase().includes('website'))).toBe(false);
     expect(links.some(l => l.label.toLowerCase().includes('instagram'))).toBe(false);

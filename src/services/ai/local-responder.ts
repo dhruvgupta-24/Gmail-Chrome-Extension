@@ -83,8 +83,8 @@ export function getBestActionLinkForStage(
     return validParent[0];
   }
 
-  // Registration
-  if (stageType === 'registration') {
+  // Registration & Nomination & Hackathons
+  if (['registration', 'nomination', 'hackathon'].includes(stageType)) {
     const regLinks = validParent.filter(l => l.type === 'registration');
     if (regLinks.length > 0) return regLinks[0];
   }

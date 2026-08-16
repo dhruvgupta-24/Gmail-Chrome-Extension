@@ -1,9 +1,9 @@
-import { ExtractedEvent, EventType, ActionLink, ProcessStage } from '../../types/events';
+import { ExtractedEvent, EventType, ProcessStage } from '../../types/events';
 import { ParsedEmailMessage } from '../../types/gmail';
 import { parseDateFromEmailText, extractTimeFromText, calculateEventStatus } from './date-parser';
-import { extractActionLinks } from '../gmail/links';
+import { extractActionLinks, deduplicateActionLinks } from '../gmail/links';
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 /**
  * Strips email reply/forward prefixes, tags, and extraneous whitespace to produce a clean display title.
@@ -40,44 +40,84 @@ export function normalizeTitleForDeduplication(title: string): string {
 }
 
 /**
- * Classifies the EventType based on email subject and content keywords.
+ * Classifies the EventType based on semantic specificity and explicit wording in subject and content.
  */
-export function detectEventType(subject: string, body: string): EventType {
-  const combined = `${subject} ${body}`.toLowerCase();
+export function detectEventType(subject: string, body: string = ''): EventType {
+  const cleanSub = cleanEventTitle(subject).toLowerCase();
+  const lowerBody = body.toLowerCase();
+  const combined = `${cleanSub} ${lowerBody}`;
 
+  // 1. Nominations / Awards
+  if (/\b(nomination|call\s+for\s+nominations|award\s+nomination|nominate)\b/i.test(cleanSub) || /\b(call\s+for\s+nominations)\b/i.test(combined)) {
+    return 'nomination';
+  }
+
+  // 2. Hackathons / Coding Competitions / Ideathons
+  if (/\b(hackathon|ideathon|coding\s+competition|sih\s*20\d\d)\b/i.test(cleanSub) || /\b(internal\s+hackathon|smart\s+india\s+hackathon)\b/i.test(combined)) {
+    return 'hackathon';
+  }
+
+  // 3. Registrations / Applications / Form Submissions
+  if (/\b(registration|register\s+before|registration\s+deadline|apply\s+before|application\s+form|call\s+for\s+applications)\b/i.test(cleanSub)) {
+    return 'registration';
+  }
+
+  // 4. Specific Technical Assessments / Coding Rounds
   if (/\b(coding\s+round|oa\b|online\s+assessment|technical\s+assessment|hackerrank|codeforces|leetcode|mettl|wheebox|test\s+credentials)\b/i.test(combined)) {
     return 'coding_round';
   }
-  if (/\b(interview|technical\s+round|hr\s+round|interview\s+schedule|discussion\s+round)\b/i.test(combined)) {
+
+  // 5. Interviews
+  if (/\b(interview|technical\s+round|hr\s+round|interview\s+schedule|discussion\s+round)\b/i.test(cleanSub) || /\b(technical\s+interview|hr\s+interview)\b/i.test(combined)) {
     return 'interview';
   }
-  if (/\b(ppt\b|pre[- ]placement\s+talk|presentation)\b/i.test(combined)) {
+
+  // 6. Pre-Placement Talks & Webinars
+  if (/\b(ppt\b|pre[- ]placement\s+talk|presentation\s+session)\b/i.test(cleanSub)) {
     return 'ppt';
   }
-  if (/\b(quiz|pop\s+quiz)\b/i.test(combined)) {
+
+  // 7. Academic Quizzes
+  if (/\b(pop\s+quiz|quiz)\b/i.test(cleanSub) || /\b(quiz\s+\d|quiz\s+scheduled)\b/i.test(combined)) {
     return 'quiz';
   }
+
+  // 8. Academic Exams
   if (/\b(midterm|endterm|final\s+exam|semester\s+exam|exam\s+schedule|examination)\b/i.test(combined)) {
     return 'exam';
   }
+
+  // 9. General Tests & Assessments
   if (/\b(assessment|test|eval|evaluation|online\s+test|aptitude\s+test|aimcat|nqt)\b/i.test(combined)) {
     return 'assessment';
   }
+
+  // 10. Assignments
   if (/\b(assignment|problem\s+set|homework|lab\s+work|project\s+submission)\b/i.test(combined)) {
     return 'assignment';
   }
+
+  // 11. Submissions
   if (/\b(submission|submit\s+by|turn\s+in)\b/i.test(combined)) {
     return 'submission';
   }
+
+  // 12. General Registrations in body
   if (/\b(registration|register\s+before|rsvp|fill\s+form|apply\s+now)\b/i.test(combined)) {
     return 'registration';
   }
+
+  // 13. Internships
   if (/\b(internship|summer\s+intern|fall\s+intern|co-op)\b/i.test(combined)) {
     return 'internship';
   }
+
+  // 14. Placements & Campus Drives
   if (/\b(placement|campus\s+drive|recruitment|job\s+offer|hiring\s+process|shortlist)\b/i.test(combined)) {
     return 'placement';
   }
+
+  // 15. Deadlines
   if (/\b(deadline|due\s+date|last\s+date|closing\s+date)\b/i.test(combined)) {
     return 'deadline';
   }
@@ -86,7 +126,7 @@ export function detectEventType(subject: string, body: string): EventType {
 }
 
 /**
- * Detects if action is required from the recipient and extracts operational details (e.g. active window, link arrival).
+ * Detects if action is required from the recipient and extracts operational details.
  */
 export function detectActionRequired(subject: string, body: string): { actionRequired: boolean; actionDescription?: string } {
   const combined = `${subject}\n${body}`;
@@ -135,29 +175,50 @@ export function detectActionRequired(subject: string, body: string): { actionReq
 }
 
 /**
- * Extracts organization or company from sender and subject.
+ * Extracts organization or company generically from subject structure, sender, and content.
  */
-export function extractOrganization(senderName: string, subject: string, body: string = ''): string {
-  const textToScan = `${senderName} ${subject} ${body.substring(0, 300)}`;
-  const companyMatch = textToScan.match(/\b(Infoedge(?:\s+India(?:\s+Ltd\.?)?)?|Info\s*Edge|Naukri|Sigmoid(?:\s+Analytics)?|Cognizant|Amazon|Google|Microsoft|Bain(?:\s+&\s+Company)?|Goldman\s+Sachs|McKinsey|Flipkart|Uber|Adobe|Salesforce|TCS|Infosys|Wipro|Accenture|Deloitte|PwC|EY|KPMG|IDFC\s+First\s+Bank|Dr\.?\s*Reddy'?s|BNP\s+Paribas|TIME|AIMCAT)\b/i);
-  if (companyMatch) {
-    let org = companyMatch[1].trim();
+export function extractOrganization(senderName: string, subject: string, _body: string = ''): string {
+  const cleanSub = cleanEventTitle(subject);
+
+  // 1. Structured subject delimiters: "Campus Details | <Company> | ..." or "Campus Drive: <Company>"
+  const pipeMatch = cleanSub.match(/^(?:campus\s+details?|campus\s+drive|recruitment\s+drive|placement\s+details?)\s*\|\s*([^|]+?)(?:\s*\||$)/i);
+  if (pipeMatch && pipeMatch[1]) {
+    const org = pipeMatch[1].trim();
+    if (org && !/^\d/.test(org) && org.length > 1) {
+      return org;
+    }
+  }
+
+  const bracketMatch = cleanSub.match(/^\[([^\]]+)\]/);
+  if (bracketMatch && bracketMatch[1]) {
+    const org = bracketMatch[1].trim();
+    if (org && !/^(external|urgent|important|reminder|action required)$/i.test(org)) {
+      return org;
+    }
+  }
+
+  const opportunityMatch = cleanSub.match(/(?:Opportunity\s*-\s*|Details\s+for\s+|Drive\s+by\s+)([A-Z0-9&.' -]{2,30})/i);
+  if (opportunityMatch && opportunityMatch[1]) {
+    return opportunityMatch[1].trim();
+  }
+
+  // 2. Pattern matching against subject text
+  const orgInSub = cleanSub.match(/\b(Infoedge(?:\s+India(?:\s+Ltd\.?)?)?|Info\s*Edge|Naukri|Sigmoid(?:\s+Analytics)?|Cognizant|IDFC(?:\s+First)?\s+Bank|Dr\.?\s*Reddy'?s|BNP\s+Paribas|TCS|Infosys|Wipro|Accenture|Deloitte|PwC|EY|KPMG|Amazon|Google|Microsoft|Flipkart|Uber|Adobe|Salesforce|TIME|AIMCAT)\b/i);
+  if (orgInSub) {
+    let org = orgInSub[1].trim();
     if (/^info\s*edge/i.test(org) || /^naukri/i.test(org)) {
       org = 'Infoedge India Ltd.';
     }
     return org;
   }
 
-  if (senderName && !senderName.includes('@')) {
-    return senderName.replace(/^["']|["']$/g, '').trim();
+  // 3. Sender Name fallback (excluding email addresses and generic tools like Teams/Zoom/Forms unless truly sender)
+  if (senderName && !senderName.includes('@') && !/^(microsoft\s+teams|google\s+forms|zoom\s+video)$/i.test(senderName.trim())) {
+    const cleanSender = senderName.replace(/^["']|["']$/g, '').trim();
+    if (cleanSender) return cleanSender;
   }
 
-  const bracketMatch = subject.match(/^\[(.*?)\]/);
-  if (bracketMatch) {
-    return bracketMatch[1].trim();
-  }
-
-  return senderName || '';
+  return '';
 }
 
 /**
@@ -176,7 +237,7 @@ export function extractProcessStages(
   const stageKeywordMatchers = [
     {
       type: 'ppt' as EventType,
-      keywordRegex: /\b(PPT|Pre[- ]Placement\s+Talk|Presentation)\b/i
+      keywordRegex: /\b(PPT|Pre[- ]Placement\s+Talk|Presentation\s+Session)\b/i
     },
     {
       type: 'assessment' as EventType,
@@ -188,7 +249,7 @@ export function extractProcessStages(
     },
     {
       type: 'registration' as EventType,
-      keywordRegex: /\b(Registration|Registration\s+Deadline|Last\s+Date\s+to\s+Apply|Apply\s+Before)\b/i
+      keywordRegex: /\b(Registration|Registration\s+Deadline|Last\s+Date\s+to\s+Apply|Apply\s+Before|Nomination)\b/i
     }
   ];
 
@@ -246,57 +307,43 @@ export function extractProcessStages(
 /**
  * Deterministically extracts structured event from a parsed Gmail message.
  */
-export function extractEventFromEmail(email: ParsedEmailMessage, currentNow: Date = new Date()): ExtractedEvent | null {
-  const dateResult = parseDateFromEmailText(email.subject, email.plainText, email.timestamp, currentNow);
-  const type = detectEventType(email.subject, email.plainText);
-  const { actionRequired, actionDescription } = detectActionRequired(email.subject, email.plainText);
-  const links = extractActionLinks(email.htmlContent || email.plainText);
-  const organization = extractOrganization(email.senderName, email.subject, email.plainText);
+export function extractEventFromEmail(email: ParsedEmailMessage, nowDate: Date = new Date()): ExtractedEvent | null {
   const cleanTitle = cleanEventTitle(email.subject);
-  const stages = extractProcessStages(email.subject, email.plainText, email.timestamp, currentNow);
+  const type = detectEventType(email.subject, email.plainText);
+  const organization = extractOrganization(email.senderName, email.subject, email.plainText);
+  const { actionRequired, actionDescription } = detectActionRequired(email.subject, email.plainText);
 
-  if (type === 'other' && !actionRequired && dateResult.status === 'unknown' && stages.length === 0) {
+  // Extract structured dates
+  const dateResult = parseDateFromEmailText(email.plainText, email.subject, email.timestamp, nowDate);
+  const allDates = dateResult.allDates || (dateResult.date ? [dateResult.date] : []);
+
+  // Extract multi-stage process stages
+  const stages = extractProcessStages(email.subject, email.plainText, email.timestamp, nowDate);
+
+  // If no date found, no stages found, and not action required, ignore non-event email
+  if (!dateResult.date && !dateResult.startDate && !dateResult.deadline && stages.length === 0 && !actionRequired) {
     return null;
   }
 
-  // Combine dates from stages and main dateResult
-  const allDatesSet = new Set<string>();
-  (dateResult.allDates || []).forEach(d => allDatesSet.add(d));
-  if (dateResult.date) allDatesSet.add(dateResult.date);
-  if (dateResult.startDate) allDatesSet.add(dateResult.startDate);
-  if (dateResult.endDate) allDatesSet.add(dateResult.endDate);
-  stages.forEach(s => {
-    if (s.date) allDatesSet.add(s.date);
-  });
-  const allDates = Array.from(allDatesSet).sort();
+  const primaryDate = dateResult.date || dateResult.startDate || (stages.length > 0 ? stages[0].date : undefined);
+  const primaryTime = dateResult.time || (stages.length > 0 ? stages[0].time : undefined);
 
-  // If stages exist, prefer primary stage date / time if available
-  let primaryDate = dateResult.date;
-  let primaryTime = dateResult.time;
-
-  const assessmentStage = stages.find(s => ['assessment', 'coding_round', 'test'].includes(s.type) && s.date);
-  if (assessmentStage) {
-    if (!primaryDate || assessmentStage.date) {
-      primaryDate = assessmentStage.date;
-    }
-    if (!primaryTime && assessmentStage.time) {
-      primaryTime = assessmentStage.time;
-    }
-  }
-
-  // Calculate dynamic status relative to currentNow
+  // Dynamic Status evaluation
   const status = calculateEventStatus(
     primaryDate,
-    currentNow,
+    nowDate,
     dateResult.endDate,
     dateResult.isContinuousRange,
-    allDates.length > 0 ? allDates : undefined,
-    stages.length > 0 ? stages : undefined
+    allDates,
+    stages
   );
 
-  // Derive stable deduplication key
+  // Extract and sanitize actionable links
+  const links = extractActionLinks(email.plainText);
+
+  // Generate normalized deterministic ID
   const normTitle = normalizeTitleForDeduplication(cleanTitle);
-  const orgKey = (organization || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const orgKey = (organization || 'general').toLowerCase().replace(/[^a-z0-9]/g, '');
   const eventId = email.threadId
     ? `thread-${email.threadId}`
     : `event-${orgKey}-${normTitle.substring(0, 30).replace(/\s+/g, '-')}`;
@@ -347,9 +394,8 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
   const sourceMap = new Map<string, typeof existing.sourceMessages[0]>();
   [...existing.sourceMessages, ...incoming.sourceMessages].forEach(m => sourceMap.set(m.messageId, m));
 
-  // Merge links avoiding duplicate URLs
-  const linkMap = new Map<string, ActionLink>();
-  [...existing.links, ...incoming.links].forEach(l => linkMap.set(l.url, l));
+  // Merge links using semantic deduplication
+  const mergedLinks = deduplicateActionLinks([...existing.links, ...incoming.links]);
 
   // Combine discrete dates if available
   const datesSet = new Set<string>();
@@ -381,49 +427,46 @@ export function mergeEvents(existing: ExtractedEvent, incoming: ExtractedEvent):
   const primary = isIncomingNewer ? incoming : existing;
   const secondary = isIncomingNewer ? existing : incoming;
 
-  // Preserve continuous range flags accurately
-  const isContinuous = primary.isContinuousRange || secondary.isContinuousRange || false;
-  const isDeadline = primary.isDeadline || secondary.isDeadline || false;
+  // Preserve strong organization name (e.g. from subject)
+  const organization = (existing.organization && !/^(microsoft\s+teams|google|zoom)$/i.test(existing.organization))
+    ? existing.organization
+    : (incoming.organization || existing.organization);
 
-  // Preserve the most informative action description
-  let combinedDesc = primary.actionDescription || secondary.actionDescription;
+  // Preserve cleaner action description without repetitive prepends
+  let actionDescription = primary.actionDescription || secondary.actionDescription;
   if (primary.actionDescription && secondary.actionDescription && primary.actionDescription !== secondary.actionDescription) {
-    if (primary.actionDescription.length >= secondary.actionDescription.length) {
-      combinedDesc = primary.actionDescription;
-    } else {
-      combinedDesc = secondary.actionDescription;
+    if (!primary.actionDescription.includes(secondary.actionDescription) && !secondary.actionDescription.includes(primary.actionDescription)) {
+      actionDescription = `${primary.actionDescription} ${secondary.actionDescription}`.trim();
     }
   }
 
-  // Enrich assessment stage if incoming email has action description (e.g. test active window / link share)
-  if (combinedDesc) {
-    const assessmentStage = stageMap.get('assessment') || stageMap.get('coding_round');
-    if (assessmentStage) {
-      assessmentStage.details = combinedDesc;
-    }
-  }
-
-  const mergedStages = Array.from(stageMap.values());
+  const stagesList = Array.from(stageMap.values());
 
   return {
     ...primary,
-    title: cleanEventTitle(primary.title.length >= secondary.title.length ? primary.title : secondary.title),
-    company: primary.company || secondary.company || primary.organization || secondary.organization,
-    startDate: isContinuous ? (primary.startDate || secondary.startDate) : undefined,
-    endDate: isContinuous ? (primary.endDate || secondary.endDate) : undefined,
+    organization,
+    company: organization || primary.company,
+    startDate: primary.startDate || secondary.startDate,
+    endDate: primary.endDate || secondary.endDate,
     date: primary.date || secondary.date,
     time: primary.time || secondary.time,
     deadline: primary.deadline || secondary.deadline,
-    isContinuousRange: isContinuous,
-    isDeadline,
+    isDeadline: primary.isDeadline || secondary.isDeadline,
+    isContinuousRange: primary.isContinuousRange || secondary.isContinuousRange,
     allDates: allDates.length > 0 ? allDates : undefined,
-    stages: mergedStages.length > 0 ? mergedStages : undefined,
+    stages: stagesList.length > 0 ? stagesList : undefined,
     actionRequired: primary.actionRequired || secondary.actionRequired,
-    actionDescription: combinedDesc,
-    organization: primary.organization || secondary.organization,
-    links: Array.from(linkMap.values()),
+    actionDescription,
+    links: mergedLinks,
     sourceMessages: Array.from(sourceMap.values()),
-    status: primary.status !== 'unknown' ? primary.status : secondary.status,
+    status: calculateEventStatus(
+      primary.date || secondary.date,
+      new Date(),
+      primary.endDate || secondary.endDate,
+      primary.isContinuousRange || secondary.isContinuousRange,
+      allDates,
+      stagesList
+    ),
     schemaVersion: CURRENT_SCHEMA_VERSION,
     updatedAt: new Date().toISOString()
   };

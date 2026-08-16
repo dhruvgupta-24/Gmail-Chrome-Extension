@@ -78,18 +78,57 @@ const IGNORED_ANCHOR_PATTERNS = [
 ];
 
 /**
- * Normalizes URL and strips common tracking query parameters.
+ * Unwraps known redirection wrappers such as Google redirect URLs and Outlook SafeLinks.
+ */
+export function unwrapRedirectUrl(rawUrl: string): string {
+  if (!rawUrl) return rawUrl;
+  try {
+    const trimmed = rawUrl.trim();
+    // 1. Google redirect wrapper: https://www.google.com/url?q=https://...
+    if (trimmed.includes('google.com/url') && trimmed.includes('q=')) {
+      const parsed = new URL(trimmed);
+      const target = parsed.searchParams.get('q');
+      if (target && target.startsWith('http')) {
+        return unwrapRedirectUrl(target);
+      }
+    }
+
+    // 2. Outlook SafeLinks: https://*.safelinks.protection.outlook.com/?url=https%3A%2F%2F...
+    if (trimmed.includes('safelinks.protection.outlook.com') && trimmed.includes('url=')) {
+      const parsed = new URL(trimmed);
+      const target = parsed.searchParams.get('url');
+      if (target && target.startsWith('http')) {
+        return unwrapRedirectUrl(target);
+      }
+    }
+
+    return trimmed;
+  } catch {
+    return rawUrl.trim();
+  }
+}
+
+/**
+ * Normalizes URL, unwraps redirects, and strips common tracking query parameters.
  */
 export function sanitizeUrl(rawUrl: string): string {
   try {
-    const url = new URL(rawUrl.trim());
+    const unwrapped = unwrapRedirectUrl(rawUrl);
+    const url = new URL(unwrapped);
+
     // Strip tracking parameters
     const paramsToStrip = [
-      'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-      'mc_cid', 'mc_eid', '_hsenc', '_hsmi', 'fbclid', 'gclid', 'ref'
+      'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id', 'utm_name',
+      'mc_cid', 'mc_eid', '_hsenc', '_hsmi', 'fbclid', 'gclid', 'ref', 'source', 'trk',
+      'mkt_tok', 'sc_src', 'sc_lid', 'sc_uid', 'sc_llid', 'guccounter', '_ga', '_gl',
+      'dclid', 'msclkid', 'yclid'
     ];
     paramsToStrip.forEach(param => url.searchParams.delete(param));
-    return url.toString();
+
+    // Remove trailing slashes and hash if empty
+    let clean = url.toString().replace(/\/+$/, '');
+    if (clean.endsWith('#')) clean = clean.slice(0, -1);
+    return clean;
   } catch {
     return rawUrl.trim();
   }
@@ -166,7 +205,7 @@ export function classifyLinkType(url: string, anchorText: string = ''): { type: 
     return { type: 'assessment', label };
   }
 
-  // 2. Registration & Application
+  // 2. Registration & Application & Nominations
   if (
     lowerUrl.includes('forms.gle') ||
     lowerUrl.includes('docs.google.com/forms') ||
@@ -176,16 +215,21 @@ export function classifyLinkType(url: string, anchorText: string = ''): { type: 
     lowerUrl.includes('pod.ai') ||
     lowerUrl.includes('apply') ||
     lowerUrl.includes('registration') ||
+    lowerUrl.includes('nomination') ||
+    lowerText.includes('nominate') ||
     lowerText.includes('register') ||
     lowerText.includes('apply now') ||
     lowerText.includes('registration form') ||
+    lowerText.includes('nomination form') ||
     lowerText.includes('fill form') ||
     lowerText.includes('rsvp') ||
     lowerText.includes('application form') ||
     lowerText.includes('submit application')
   ) {
     let label = 'Register';
-    if (lowerText.includes('apply') || lowerUrl.includes('apply')) {
+    if (lowerText.includes('nominate') || lowerText.includes('nomination') || lowerUrl.includes('nomination')) {
+      label = 'Submit Nomination';
+    } else if (lowerText.includes('apply') || lowerUrl.includes('apply')) {
       label = 'Apply';
     } else if (lowerUrl.includes('unstop.com')) {
       label = 'Register on Unstop';
@@ -269,7 +313,6 @@ export function classifyLinkType(url: string, anchorText: string = ''): { type: 
     return { type: 'portal', label };
   }
 
-  // Otherwise, ignore generic links to avoid spamming the card with noise
   return null;
 }
 
@@ -293,14 +336,12 @@ function isGenericAnchor(text: string): boolean {
 }
 
 /**
- * Extracts only high-value, actionable URLs from HTML and plain text.
- * Aggressively filters out social media, marketing footers, generic websites, and unsubs.
+ * Extracts only high-value, actionable URLs from HTML and plain text with comprehensive semantic deduplication.
  */
 export function extractActionLinks(htmlOrText: string): ActionLink[] {
   if (!htmlOrText) return [];
 
-  const results: ActionLink[] = [];
-  const seenUrls = new Set<string>();
+  const rawCandidates: ActionLink[] = [];
 
   // 1. Extract from HTML anchor tags: <a href="..." ...>Text</a>
   const anchorRegex = /<a\s+(?:[^>]*?\s+)?href=["'](https?:\/\/[^"'>]+)["'][^>]*>(.*?)<\/a>/gis;
@@ -311,12 +352,9 @@ export function extractActionLinks(htmlOrText: string): ActionLink[] {
     const rawAnchorText = match[2].replace(/<[^>]+>/g, '').trim();
     const cleanUrl = sanitizeUrl(rawUrl);
 
-    if (!seenUrls.has(cleanUrl)) {
-      const classified = classifyLinkType(cleanUrl, rawAnchorText);
-      if (classified) {
-        seenUrls.add(cleanUrl);
-        results.push({ label: classified.label, url: cleanUrl, type: classified.type });
-      }
+    const classified = classifyLinkType(cleanUrl, rawAnchorText);
+    if (classified) {
+      rawCandidates.push({ label: classified.label, url: cleanUrl, type: classified.type });
     }
   }
 
@@ -326,30 +364,27 @@ export function extractActionLinks(htmlOrText: string): ActionLink[] {
     const rawUrl = match[1].replace(/[.,;:!?]+$/, ''); // Strip trailing punctuation
     const cleanUrl = sanitizeUrl(rawUrl);
 
-    if (!seenUrls.has(cleanUrl)) {
-      const classified = classifyLinkType(cleanUrl, '');
-      if (classified) {
-        seenUrls.add(cleanUrl);
-        results.push({ label: classified.label, url: cleanUrl, type: classified.type });
-      }
+    const classified = classifyLinkType(cleanUrl, '');
+    if (classified) {
+      rawCandidates.push({ label: classified.label, url: cleanUrl, type: classified.type });
     }
   }
 
-  // Deduplicate results by normalized URL and label
+  return deduplicateActionLinks(rawCandidates);
+}
+
+/**
+ * Deduplicates links semantically:
+ * - Collapses duplicate action buttons with identical normalized labels pointing to the same service/domain.
+ * - Collapses duplicate exact/sanitized URLs.
+ * - Preserves genuinely distinct actions (e.g. Apply, Join Teams, View Results).
+ */
+export function deduplicateActionLinks(links: ActionLink[]): ActionLink[] {
+  if (!links || links.length === 0) return [];
+
   const uniqueResults: ActionLink[] = [];
-  const seenKeys = new Set<string>();
-
-  for (const item of results) {
-    const normUrl = item.url.toLowerCase().replace(/\/+$/, '');
-    const normLabel = item.label.toLowerCase();
-    const key = `${normUrl}|${normLabel}`;
-
-    if (!seenKeys.has(key) && !seenKeys.has(normUrl)) {
-      seenKeys.add(key);
-      seenKeys.add(normUrl);
-      uniqueResults.push(item);
-    }
-  }
+  const seenUrls = new Set<string>();
+  const seenActionKeys = new Set<string>();
 
   // Prioritize high-value action links (assessments, registrations, meetings first)
   const priorityOrder: Record<ActionLinkType, number> = {
@@ -361,7 +396,42 @@ export function extractActionLinks(htmlOrText: string): ActionLink[] {
     general: 6
   };
 
-  return uniqueResults
-    .sort((a, b) => (priorityOrder[a.type || 'general'] || 10) - (priorityOrder[b.type || 'general'] || 10))
-    .slice(0, 3); // Return at most top 3 high-value action links
+  const sortedCandidates = [...links].sort(
+    (a, b) => (priorityOrder[a.type || 'general'] || 10) - (priorityOrder[b.type || 'general'] || 10)
+  );
+
+  for (const item of sortedCandidates) {
+    const cleanUrl = sanitizeUrl(item.url);
+    const normUrl = cleanUrl.toLowerCase().replace(/\/+$/, '');
+    const normLabel = item.label.trim().toLowerCase();
+
+    // Semantic key based on action type + label or base destination
+    let domainKey = '';
+    try {
+      const u = new URL(cleanUrl);
+      domainKey = u.hostname.toLowerCase();
+      // If it's a specific form (e.g. forms.gle or unstop), use pathname for discrimination
+      if (domainKey.includes('forms.gle') || domainKey.includes('unstop.com') || domainKey.includes('docs.google.com')) {
+        domainKey = `${domainKey}${u.pathname.toLowerCase()}`;
+      }
+    } catch {
+      domainKey = normUrl;
+    }
+
+    const actionKey = `${item.type || 'general'}|${normLabel}|${domainKey}`;
+
+    if (seenUrls.has(normUrl) || seenActionKeys.has(actionKey)) {
+      continue;
+    }
+
+    seenUrls.add(normUrl);
+    seenActionKeys.add(actionKey);
+    uniqueResults.push({
+      label: item.label,
+      url: cleanUrl,
+      type: item.type
+    });
+  }
+
+  return uniqueResults.slice(0, 3); // Return at most top 3 high-value action links
 }
